@@ -174,7 +174,11 @@ def fetch(
         for req, exc in failures:
             click.echo(f"  {req.commodity} ({req.ticker}): {exc}", err=True)
 
-    writer = PriceWriter(prices_dir=Path(prices_dir), file_extension=file_extension)
+    writer = PriceWriter(
+        prices_dir=Path(prices_dir),
+        file_extension=file_extension,
+        display_precision=analysis.display_precision,
+    )
     by_commodity: dict[str, list[FetchedPrice]] = {}
     for fp in successes:
         by_commodity.setdefault(fp.commodity, []).append(fp)

@@ -12,6 +12,7 @@ closed period.
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 from beancount.loader import load_file
@@ -186,6 +187,34 @@ def test_analyze_ledger_wires_everything_together() -> None:
     assert "SPY" in result.held_periods
     assert "SPY" in result.existing_prices
     assert result.today == date(2024, 12, 31)
+
+
+def test_analyze_ledger_default_display_precision_is_empty() -> None:
+    """When the ledger has no display_precision option, the map is empty."""
+    result = analyze_ledger(FIXTURE)
+    assert result.display_precision == {}
+
+
+def test_analyze_ledger_extracts_display_precision(tmp_path: Path) -> None:
+    """When the ledger sets option display_precision, it's extracted as a dict."""
+    ledger = (
+        'option "title" "test"\n'
+        'option "operating_currency" "USD"\n'
+        'option "display_precision" "USD:0.01"\n'
+        'option "display_precision" "EUR:0.0001"\n'
+        "\n"
+        "2024-01-01 commodity USD\n"
+        "2024-01-01 commodity EUR\n"
+    )
+    ledger_path = tmp_path / "test.beancount"
+    ledger_path.write_text(ledger)
+    result = analyze_ledger(ledger_path)
+    from decimal import Decimal
+
+    assert result.display_precision == {
+        "USD": Decimal("0.01"),
+        "EUR": Decimal("0.0001"),
+    }
 
 
 def test_unfrozen_today_is_today() -> None:

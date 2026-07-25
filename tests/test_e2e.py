@@ -9,6 +9,7 @@ This is the final integration test from plan §5 step 7. It exercises:
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -16,7 +17,7 @@ from freezegun import freeze_time
 
 from beancount_price_fetcher.fetcher import PriceFetcher
 from beancount_price_fetcher.ledger import analyze_ledger
-from beancount_price_fetcher.models import Frequency
+from beancount_price_fetcher.models import FetchedPrice, Frequency
 from beancount_price_fetcher.requirements import compute_requirements
 from beancount_price_fetcher.writer import PriceWriter
 
@@ -167,3 +168,69 @@ def test_e2e_no_missing_dates_after_writes(mocker: object, tmp_path: Path) -> No
     total_missing = sum(len(r.missing_dates) for r in reqs)
     total_missing_2 = sum(len(r.missing_dates) for r in reqs2)
     assert total_missing_2 < total_missing
+
+
+def test_e2e_display_precision_quantizes_written_prices(mocker: object, tmp_path: Path) -> None:
+    """End-to-end: ledger has display_precision, prices are quantized on write."""
+    ledger = (
+        'option "title" "test"\n'
+        'option "operating_currency" "USD"\n'
+        'option "display_precision" "USD:0.01"\n'
+        "\n"
+        "2018-01-01 commodity SPY\n"
+        '  price: "USD:yahoo/SPY"\n'
+        "\n"
+        "2018-01-01 open Assets:Investments:SPY\n"
+        "2018-01-01 open Assets:Bank USD\n"
+        "\n"
+        "2018-01-02 *\n"
+        "  Assets:Investments:SPY  10 SPY {300 USD}\n"
+        "  Assets:Bank\n"
+    )
+    ledger_path = tmp_path / "test.beancount"
+    ledger_path.write_text(ledger)
+
+    with freeze_time("2024-12-31"):
+        analysis = analyze_ledger(ledger_path)
+        assert analysis.display_precision == {"USD": Decimal("0.01")}
+
+        reqs = compute_requirements(
+            analysis.held_periods,
+            analysis.existing_prices,
+            analysis.metadata,
+            default_frequency=Frequency.DAILY,
+        )
+        spy_req = next(r for r in reqs if r.commodity == "SPY")
+
+        # Mock yfinance to return a price with extra precision
+        def history(**kw: object) -> pd.DataFrame:
+            rows = []
+            for d in sorted(spy_req.missing_dates):
+                rows.append((d.isoformat(), 512.345678))
+            idx = pd.to_datetime([r[0] for r in rows])
+            return pd.DataFrame({"Close": [r[1] for r in rows]}, index=idx)
+
+        mocker.patch("yfinance.Ticker.history", side_effect=history)
+        fetcher = PriceFetcher(threads=1, retries=1)
+        successes, _failures = fetcher.fetch_all(reqs)
+
+        prices_dir = tmp_path / "prices"
+        writer = PriceWriter(
+            prices_dir=prices_dir,
+            display_precision=analysis.display_precision,
+        )
+        by_commodity: dict[str, list[FetchedPrice]] = {}
+        for fp in successes:
+            by_commodity.setdefault(fp.commodity, []).append(fp)
+        for c, fp_list in by_commodity.items():
+            writer.write_commodity(c, fp_list)
+
+        # Every written line should have exactly 2 decimal places
+        for f in prices_dir.glob("*.bean"):
+            for line in f.read_text().splitlines():
+                if line.startswith("20"):
+                    amount_str = line.split()[3]
+                    # Must be 2 decimal places
+                    assert "." in amount_str
+                    decimal_places = len(amount_str.split(".")[1])
+                    assert decimal_places == 2, f"{line!r} has {decimal_places} decimal places"

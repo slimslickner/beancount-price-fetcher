@@ -34,6 +34,7 @@ class LedgerAnalysis:
     existing_prices: dict[str, set[date]] = field(default_factory=dict)
     operating_currencies: frozenset[str] = field(default_factory=frozenset)
     today: date = field(default_factory=date.today)
+    display_precision: dict[str, Decimal] = field(default_factory=dict)
 
 
 def analyze_ledger(path: str | Path, today: date | None = None) -> LedgerAnalysis:
@@ -70,6 +71,7 @@ def analyze_ledger(path: str | Path, today: date | None = None) -> LedgerAnalysi
         existing_prices=extract_existing_prices(entries),
         operating_currencies=operating_currencies,
         today=ref_today,
+        display_precision=dict(options.get("display_precision", {})),
     )
 
 

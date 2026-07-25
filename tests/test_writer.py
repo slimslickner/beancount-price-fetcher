@@ -41,6 +41,74 @@ def test_render_price_line_currency_in_name() -> None:
     assert line == "2024-03-15 price EUR 1.195 USD"
 
 
+def test_render_price_line_no_precision_map_leaves_amount_alone() -> None:
+    """Without precision_map, the amount is rendered as-is."""
+    line = render_price_line(date(2024, 3, 15), "SPY", Decimal("512.345678"), "USD")
+    assert line == "2024-03-15 price SPY 512.345678 USD"
+
+
+def test_render_price_line_with_usd_precision() -> None:
+    """USD precision=0.01 quantizes to 2 decimal places."""
+    precision = {"USD": Decimal("0.01")}
+    line = render_price_line(date(2024, 3, 15), "SPY", Decimal("512.345678"), "USD", precision)
+    assert line == "2024-03-15 price SPY 512.35 USD"
+
+
+def test_render_price_line_with_usd_precision_no_rounding_needed() -> None:
+    """When the amount already has 2 decimals, it's left alone."""
+    precision = {"USD": Decimal("0.01")}
+    line = render_price_line(date(2024, 3, 15), "SPY", Decimal("512.34"), "USD", precision)
+    assert line == "2024-03-15 price SPY 512.34 USD"
+
+
+def test_render_price_line_with_eur_precision() -> None:
+    """EUR precision=0.0001 quantizes to 4 decimal places."""
+    precision = {"EUR": Decimal("0.0001")}
+    line = render_price_line(date(2024, 3, 15), "EUR", Decimal("1.1956789"), "EUR", precision)
+    assert line == "2024-03-15 price EUR 1.1957 EUR"
+
+
+def test_render_price_line_with_jpy_precision() -> None:
+    """JPY precision=1 (integer) means no decimals."""
+    precision = {"JPY": Decimal("1")}
+    line = render_price_line(date(2024, 3, 15), "USDJPY", Decimal("150.42"), "JPY", precision)
+    assert line == "2024-03-15 price USDJPY 150 JPY"
+
+
+def test_render_price_line_precision_applied_per_quote_currency() -> None:
+    """Precision is keyed by quote currency; commodity code is irrelevant."""
+    precision = {"USD": Decimal("0.01"), "EUR": Decimal("0.0001")}
+    usd_line = render_price_line(date(2024, 3, 15), "SPY", Decimal("300.456"), "USD", precision)
+    eur_line = render_price_line(date(2024, 3, 15), "SPY", Decimal("300.4567"), "EUR", precision)
+    assert usd_line == "2024-03-15 price SPY 300.46 USD"
+    assert eur_line == "2024-03-15 price SPY 300.4567 EUR"
+
+
+def test_render_price_line_precision_uses_bankers_rounding() -> None:
+    """ROUND_HALF_EVEN: 0.005 -> 0.00 (not 0.01)."""
+    precision = {"USD": Decimal("0.01")}
+    line = render_price_line(date(2024, 3, 15), "SPY", Decimal("100.005"), "USD", precision)
+    assert line == "2024-03-15 price SPY 100.00 USD"
+
+
+def test_quantize_for_currency_unknown_currency_passthrough() -> None:
+    """Unknown currencies (not in precision_map) keep their full precision."""
+    from beancount_price_fetcher.writer import quantize_for_currency
+
+    assert quantize_for_currency(Decimal("512.345678"), "XYZ", {}) == Decimal("512.345678")
+    assert quantize_for_currency(Decimal("512.345678"), "XYZ", {"USD": Decimal("0.01")}) == Decimal(
+        "512.345678"
+    )
+
+
+def test_quantize_for_currency_known_currency_quantizes() -> None:
+    from beancount_price_fetcher.writer import quantize_for_currency
+
+    assert quantize_for_currency(Decimal("512.345678"), "USD", {"USD": Decimal("0.01")}) == Decimal(
+        "512.35"
+    )
+
+
 def test_parse_price_file_roundtrip(tmp_path: Path) -> None:
     src = tmp_path / "SPY.bean"
     src.write_text(";; header\n2024-01-02 price SPY 300.00 USD\n2024-01-03 price SPY 301.00 USD\n")
@@ -320,3 +388,62 @@ def test_is_dated_filename_beans() -> None:
     assert is_dated_filename("prices-2024-01-15.gen.bean")
     assert not is_dated_filename("SPY.bean")
     assert not is_dated_filename("2024-01-15.bean")
+
+
+# ---- Display-precision integration ----
+
+
+def test_price_writer_applies_display_precision(tmp_path: Path) -> None:
+    """When display_precision is set on the writer, prices are quantized."""
+    pw = PriceWriter(
+        prices_dir=tmp_path,
+        display_precision={"USD": Decimal("0.01")},
+    )
+    pw.write_commodity(
+        "SPY",
+        [FetchedPrice("SPY", "USD", date(2024, 1, 5), Decimal("512.345678"))],
+    )
+    content = (tmp_path / "SPY.bean").read_text()
+    # Quantized to 2 decimal places
+    assert "2024-01-05 price SPY 512.35 USD" in content
+
+
+def test_price_writer_no_precision_keeps_full_value(tmp_path: Path) -> None:
+    """Without display_precision, the raw amount is written."""
+    pw = PriceWriter(prices_dir=tmp_path)
+    pw.write_commodity(
+        "SPY",
+        [FetchedPrice("SPY", "USD", date(2024, 1, 5), Decimal("512.345678"))],
+    )
+    content = (tmp_path / "SPY.bean").read_text()
+    assert "2024-01-05 price SPY 512.345678 USD" in content
+
+
+def test_price_writer_precision_applies_only_to_known_currencies(
+    tmp_path: Path,
+) -> None:
+    """Currencies not in display_precision keep full precision."""
+    pw = PriceWriter(
+        prices_dir=tmp_path,
+        display_precision={"USD": Decimal("0.01")},
+    )
+    pw.write_commodity(
+        "SPY",
+        [FetchedPrice("SPY", "USD", date(2024, 1, 5), Decimal("195.456"))],
+    )
+    pw.write_commodity(
+        "SPY",
+        [FetchedPrice("SPY", "EUR", date(2024, 1, 5), Decimal("195.456789"))],
+    )
+    # Both calls target SPY.bean. The EUR price has different date+quote;
+    # to avoid dedup-on-(commodity, date), use different dates.
+    content_usd = (tmp_path / "SPY.bean").read_text()
+    assert "2024-01-05 price SPY 195.46 USD" in content_usd
+
+    pw.write_commodity(
+        "SPY",
+        [FetchedPrice("SPY", "EUR", date(2024, 1, 6), Decimal("195.456789"))],
+    )
+    content_all = (tmp_path / "SPY.bean").read_text()
+    assert "2024-01-05 price SPY 195.46 USD" in content_all
+    assert "2024-01-06 price SPY 195.456789 EUR" in content_all  # EUR not in map, full precision

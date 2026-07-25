@@ -14,6 +14,12 @@ Fetch behaviour is **append-only**: existing file content is preserved as-is
 and new prices are appended at the end. A downstream tool (e.g. bean-format)
 handles final date sorting. Pass ``sort=True`` to re-render and sort
 everything (used by the migrate command).
+
+Precision is controlled by ``display_precision``: a ``{currency: Decimal}``
+map parsed from the ledger's ``option "display_precision" "USD:0.01"``
+directives. Each price is quantized to its quote currency's increment
+before being written. Currencies not in the map are left at full
+precision.
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from pathlib import Path
 
 from beancount.core import data
@@ -54,8 +60,36 @@ def is_dated_filename(name: str) -> bool:
     return _DATED_RE.match(name) is not None
 
 
-def render_price_line(price_date: date, commodity: str, amount: Decimal, currency: str) -> str:
-    """Render a single ``YYYY-MM-DD price COMMODITY AMOUNT CURRENCY`` line."""
+def quantize_for_currency(
+    amount: Decimal, currency: str, precision_map: dict[str, Decimal]
+) -> Decimal:
+    """Quantize ``amount`` to the precision configured for ``currency``.
+
+    If ``currency`` is not in ``precision_map``, returns ``amount``
+    unchanged. Otherwise quantizes using banker's rounding (the same
+    default beancount uses) to the configured increment.
+    """
+    precision = precision_map.get(currency)
+    if precision is None:
+        return amount
+    return amount.quantize(Decimal(precision), rounding=ROUND_HALF_EVEN)
+
+
+def render_price_line(
+    price_date: date,
+    commodity: str,
+    amount: Decimal,
+    currency: str,
+    precision_map: dict[str, Decimal] | None = None,
+) -> str:
+    """Render a single ``YYYY-MM-DD price COMMODITY AMOUNT CURRENCY`` line.
+
+    If ``precision_map`` is provided and contains ``currency``, the
+    amount is quantized to that precision before rendering. Otherwise
+    the amount is used as-is.
+    """
+    if precision_map is not None:
+        amount = quantize_for_currency(amount, currency, precision_map)
     return f"{price_date.isoformat()} price {commodity} {amount} {currency}"
 
 
@@ -94,6 +128,7 @@ def append_prices(
     existing: Iterable[tuple[str, date]] | None,
     *,
     sort: bool = False,
+    precision_map: dict[str, Decimal] | None = None,
 ) -> bool:
     """Append ``new_prices`` to ``target_path``.
 
@@ -109,20 +144,25 @@ def append_prices(
             hand-curated or already in some non-date order) are not
             re-arranged; a downstream tool like bean-format handles final
             sorting.
+        precision_map: Optional ``{currency: Decimal}`` mapping (typically
+            parsed from the ledger's ``display_precision`` option). When
+            supplied, each price's amount is quantized to its quote
+            currency's configured increment before being written.
 
     Returns:
         True if any line was written; False if nothing changed (empty input
         or all deduped out).
     """
     if sort:
-        return _append_prices_with_sort(target_path, new_prices, existing)
-    return _append_prices_preserving_order(target_path, new_prices, existing)
+        return _append_prices_with_sort(target_path, new_prices, existing, precision_map)
+    return _append_prices_preserving_order(target_path, new_prices, existing, precision_map)
 
 
 def _append_prices_preserving_order(
     target_path: Path,
     new_prices: Iterable[FetchedPrice],
     existing: Iterable[tuple[str, date]] | None,
+    precision_map: dict[str, Decimal] | None,
 ) -> bool:
     """Append-only mode: preserve existing file content; new lines at end."""
     existing_keys: set[tuple[str, date]] = set(existing or [])
@@ -136,7 +176,9 @@ def _append_prices_preserving_order(
         if key in existing_keys:
             continue
         existing_keys.add(key)
-        new_lines.append(render_price_line(fp.date, fp.commodity, fp.price, fp.quote_currency))
+        new_lines.append(
+            render_price_line(fp.date, fp.commodity, fp.price, fp.quote_currency, precision_map)
+        )
 
     if not new_lines:
         return False
@@ -159,6 +201,7 @@ def _append_prices_with_sort(
     target_path: Path,
     new_prices: Iterable[FetchedPrice],
     existing: Iterable[tuple[str, date]] | None,
+    precision_map: dict[str, Decimal] | None,
 ) -> bool:
     """Re-render mode: parse, merge, sort by date, rewrite the whole file."""
     existing_keys: set[tuple[str, date]] = set(existing or [])
@@ -167,7 +210,7 @@ def _append_prices_with_sort(
         for fp in parse_price_file(target_path):
             existing_keys.add((fp.commodity, fp.date))
             all_lines.setdefault(fp.date, []).append(
-                render_price_line(fp.date, fp.commodity, fp.price, fp.quote_currency)
+                render_price_line(fp.date, fp.commodity, fp.price, fp.quote_currency, precision_map)
             )
 
     to_write: list[FetchedPrice] = []
@@ -183,7 +226,7 @@ def _append_prices_with_sort(
 
     for fp in to_write:
         all_lines.setdefault(fp.date, []).append(
-            render_price_line(fp.date, fp.commodity, fp.price, fp.quote_currency)
+            render_price_line(fp.date, fp.commodity, fp.price, fp.quote_currency, precision_map)
         )
 
     sorted_dates = sorted(all_lines)
@@ -208,6 +251,7 @@ class PriceWriter:
     prices_dir: Path
     file_extension: str = DEFAULT_FILE_EXTENSION
     sort_output: bool = False
+    display_precision: dict[str, Decimal] = field(default_factory=dict)
     _written_keys: set[tuple[str, date]] = field(init=False, default_factory=set)
 
     def __post_init__(self) -> None:
@@ -239,6 +283,7 @@ class PriceWriter:
             to_write,
             existing=set(self._written_keys),
             sort=self.sort_output,
+            precision_map=self.display_precision,
         )
         if not result:
             return 0
@@ -254,5 +299,6 @@ __all__ = [
     "append_prices",
     "is_dated_filename",
     "parse_price_file",
+    "quantize_for_currency",
     "render_price_line",
 ]

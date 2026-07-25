@@ -110,6 +110,22 @@ A commodity with a buy/sell/rebuy history gets **multiple disjoint
 2022-06-30, rebought on 2023-03-01 produces two periods. The fetcher
 fills prices for both windows, skipping the gap.
 
+## Display precision
+
+Price amounts are quantized to each quote currency's `display_precision`
+increment declared in the ledger:
+
+```beancount
+option "display_precision" "USD:0.01"
+option "display_precision" "EUR:0.0001"
+option "display_precision" "JPY:1"
+```
+
+With the above, USD prices are written with exactly 2 decimals, EUR
+with 4, JPY as integers. Currencies not in the precision map keep full
+precision. Rounding uses `ROUND_HALF_EVEN` (banker's rounding), the
+same default beancount uses.
+
 ## Library API
 
 ```python
