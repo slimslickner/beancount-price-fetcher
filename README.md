@@ -171,4 +171,4 @@ tests/fixtures/example.beancount    # shared fixture covering all edge cases
 
 ## License
 
-GNU GPLv2. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
