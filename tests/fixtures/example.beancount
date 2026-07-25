@@ -1,0 +1,135 @@
+;; tests/fixtures/example.beancount
+;;
+;; Shared test fixture: a small but complete Beancount ledger used across
+;; all test modules.
+;;
+;; Hand-computed expectations (assumes "today" is frozen at 2024-12-31):
+;;
+;; Held ranges:
+;;     SPY:    2020-01-02 -> 2024-12-31, open
+;;     AAPL:   2021-01-15 -> 2024-12-31, open (sold 2022-06-30, rebought 2023-03-01)
+;;     FXAIX:  2022-01-03 -> 2024-12-31, open
+;;     GOOG:   2019-01-02 -> 2020-12-31, closed
+;;     EUR:    2021-03-15 -> 2021-08-15, closed (non-base currency, no cost)
+;;     MSFT:   2021-06-01 -> 2024-12-31, open (no Commodity directive -> fallback)
+;;
+;; Commodity metadata:
+;;     SPY:    ticker=SPY,      quote=USD, freq=DAILY (default),         no start-date override
+;;     AAPL:   ticker=AAPL,     quote=USD, freq=DAILY (default),         no start-date override
+;;     FXAIX:  ticker=FXAIX,    quote=USD, freq=MONTHLY_LAST (override), no start-date override
+;;     GOOG:   ticker=GOOG,     quote=USD, freq=DAILY (default),         start-date override=2018-01-01
+;;     EUR:    ticker=EURUSD=X, quote=USD, freq=DAILY (default),         no start-date override
+;;     MSFT:   ticker=MSFT (fallback), quote=USD (operating currency),    freq=DAILY (default)
+
+option "title" "example"
+option "operating_currency" "USD"
+
+;; ---- Commodity directives (with metadata) ---------------------------------
+
+2020-01-01 commodity SPY
+  price: "USD:yahoo/SPY"
+
+2021-01-01 commodity AAPL
+  price: "USD:yahoo/AAPL"
+
+2022-01-01 commodity FXAIX
+  price: "USD:yahoo/FXAIX"
+  price-frequency: "monthly-last"
+
+2018-01-01 commodity GOOG
+  price: "USD:yahoo/GOOG"
+  price-start-date: 2018-01-01
+
+2021-03-01 commodity EUR
+  price: "USD:yahoo/EURUSD=X"
+
+;; MSFT intentionally has NO Commodity directive -> exercises fallback path
+;; (ticker defaults to commodity code, quote currency = operating currency)
+
+;; ---- Account opens -------------------------------------------------------
+;; Beancount requires explicit open directives for every account referenced
+;; in a posting. Sub-accounts for individual commodities are opened WITHOUT
+;; a declared currency so they can hold their respective commodity.
+;; Income/expense accounts are opened without a currency constraint so
+;; they can receive either USD or EUR.
+
+2018-01-01 open Assets:Investments USD
+2018-01-01 open Assets:Bank USD
+2018-01-01 open Assets:Investments:SPY
+2018-01-01 open Assets:Investments:AAPL
+2018-01-01 open Assets:Investments:FXAIX
+2018-01-01 open Assets:Investments:GOOG
+2018-01-01 open Assets:Investments:MSFT
+2018-01-01 open Assets:Bank:Realized USD
+2018-01-01 open Income:Bank
+2018-01-01 open Expenses:Travel
+2018-01-01 open Assets:Bank:EUR EUR
+
+;; ---- Transactions ---------------------------------------------------------
+
+;; SPY: continuous hold from 2020-01-02 onward (at cost)
+2020-01-02 *
+  Assets:Investments:SPY  100 SPY {300 USD}
+  Assets:Bank
+
+;; AAPL: bought 2021-01-15, sold 2022-06-30, rebought 2023-03-01 (still held)
+2021-01-15 *
+  Assets:Investments:AAPL  50 AAPL {130 USD}
+  Assets:Bank
+
+2022-06-30 *
+  Assets:Bank  6500 USD
+  Assets:Investments:AAPL  -50 AAPL {130 USD}
+  Assets:Bank:Realized
+
+2023-03-01 *
+  Assets:Investments:AAPL  30 AAPL {150 USD}
+  Assets:Bank
+
+;; FXAIX: bought 2022-01-03, still held (monthly pricing override)
+2022-01-03 *
+  Assets:Investments:FXAIX  200 FXAIX {130 USD}
+  Assets:Bank
+
+;; GOOG: bought 2019-01-02, sold 2020-12-31 (then closed)
+2019-01-02 *
+  Assets:Investments:GOOG  30 GOOG {1050 USD}
+  Assets:Bank
+
+2020-12-31 *
+  Assets:Bank  31500 USD
+  Assets:Investments:GOOG  -30 GOOG {1050 USD}
+  Assets:Bank:Realized
+
+;; EUR: non-base currency, no cost, opened 2021-03-15, withdrawn 2021-08-15
+2021-03-15 *
+  Assets:Bank:EUR  1000 EUR
+  Income:Bank
+
+2021-08-15 *
+  Expenses:Travel  1000 EUR
+  Assets:Bank:EUR  -1000 EUR
+
+;; MSFT: bought 2021-06-01, still held (no Commodity directive)
+2021-06-01 *
+  Assets:Investments:MSFT  25 MSFT {260 USD}
+  Assets:Bank
+
+;; ---- Existing Price directives (partial coverage; deliberate gaps) --------
+
+2020-01-02 price SPY 300.00 USD
+2020-06-15 price SPY 310.50 USD
+
+2021-01-15 price AAPL 130.00 USD
+2022-06-30 price AAPL 150.00 USD
+
+2022-01-03 price FXAIX 130.00 USD
+2022-01-31 price FXAIX 145.00 USD
+
+2018-01-01 price GOOG 1100.00 USD
+2019-01-02 price GOOG 1050.00 USD
+
+2021-03-15 price EUR 1.195 USD
+2021-08-15 price EUR 1.180 USD
+
+2021-06-01 price MSFT 260.00 USD

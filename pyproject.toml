@@ -1,7 +1,80 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "beancount-price-fetcher"
 version = "0.1.0"
-description = "An opinionated price fetcher for beancount to be implemented as part of an automated import process."
+description = "Scan a Beancount ledger for missing commodity prices and backfill them via yfinance."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+license = {text = "GNU GPLv2"}
+authors = [
+    {name = "slimslickner"},
+]
+keywords = ["beancount", "finance", "accounting", "prices", "yfinance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+    "beancount>=3.2.0",
+    "click>=8.1",
+    "tenacity>=8.2",
+    "yfinance>=0.2.40",
+]
+
+[project.urls]
+Repository = "https://github.com/slimslickner/beancount-price-fetcher"
+
+[project.scripts]
+beanprices = "beancount_price_fetcher.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/beancount_price_fetcher"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-mock>=3.14",
+    "freezegun>=1.5",
+    "ruff>=0.7",
+    "mypy>=1.13",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+strict = true
+python_version = "3.13"
+ignore_missing_imports = false
+
+[[tool.mypy.overrides]]
+module = "beancount.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "yfinance.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pandas.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
