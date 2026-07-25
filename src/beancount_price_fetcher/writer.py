@@ -37,11 +37,16 @@ HEADER_TEMPLATE = """\
 ;; DO NOT EDIT -- this file is overwritten on each run.
 """
 
-_DATED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.beancount$")
+_DATED_RE = re.compile(r"^prices-\d{4}-\d{2}-\d{2}(\.gen)?\.bean$")
 
 
 def is_dated_filename(name: str) -> bool:
-    """True if ``name`` matches the ``YYYY-MM-DD.beancount`` pattern."""
+    """True if ``name`` matches bean-price's dated-file pattern.
+
+    Recognised shapes:
+        ``prices-YYYY-MM-DD.bean``
+        ``prices-YYYY-MM-DD.gen.bean``
+    """
     return _DATED_RE.match(name) is not None
 
 

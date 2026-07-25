@@ -129,7 +129,7 @@ def test_cli_migrate_dated_prices_dry_run(runner: CliRunner, tmp_path) -> None:
     """migrate-dated-prices --dry-run prints plan without moving anything."""
     prices = tmp_path / "prices"
     prices.mkdir()
-    (prices / "2024-01-15.beancount").write_text("2024-01-15 price SPY 300.00 USD\n")
+    (prices / "prices-2024-01-15.bean").write_text("2024-01-15 price SPY 300.00 USD\n")
     result = runner.invoke(
         cli,
         [
@@ -141,7 +141,7 @@ def test_cli_migrate_dated_prices_dry_run(runner: CliRunner, tmp_path) -> None:
     )
     assert result.exit_code == 0
     # Original still in place
-    assert (prices / "2024-01-15.beancount").exists()
+    assert (prices / "prices-2024-01-15.bean").exists()
     # Per-symbol file NOT created
     assert not (prices / "SPY.beancount").exists()
     assert (
@@ -155,8 +155,8 @@ def test_cli_migrate_dated_prices_moves_originals(runner: CliRunner, tmp_path) -
     """Real migrate moves originals to _archive_dated, writes per-symbol files."""
     prices = tmp_path / "prices"
     prices.mkdir()
-    (prices / "2024-01-15.beancount").write_text("2024-01-15 price SPY 300.00 USD\n")
-    (prices / "2024-01-16.beancount").write_text("2024-01-16 price AAPL 195.00 USD\n")
+    (prices / "prices-2024-01-15.bean").write_text("2024-01-15 price SPY 300.00 USD\n")
+    (prices / "prices-2024-01-16.bean").write_text("2024-01-16 price AAPL 195.00 USD\n")
     result = runner.invoke(
         cli,
         [
@@ -170,7 +170,7 @@ def test_cli_migrate_dated_prices_moves_originals(runner: CliRunner, tmp_path) -
     assert (prices / "AAPL.beancount").exists()
     archive = prices / "_archive_dated"
     assert archive.exists()
-    assert (archive / "2024-01-15.beancount").exists()
+    assert (archive / "prices-2024-01-15.bean").exists()
 
 
 def test_cli_verbosity(runner: CliRunner) -> None:

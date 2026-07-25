@@ -189,7 +189,7 @@ def fetch(
 )
 @click.option("--dry-run", is_flag=True, help="Print the plan without moving or writing.")
 def migrate_cmd(prices_dir: str, dry_run: bool) -> None:
-    """One-time: convert ``prices/YYYY-MM-DD.beancount`` -> per-symbol files."""
+    """One-time: convert bean-price dated files (.bean / .gen.bean) -> per-symbol files."""
     result = migrate_dated_prices(prices_dir=Path(prices_dir), dry_run=dry_run)
     click.echo(
         f"{'[DRY RUN] ' if dry_run else ''}"

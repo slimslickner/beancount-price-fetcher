@@ -1,8 +1,10 @@
-"""One-time migration: dated ``prices/YYYY-MM-DD.beancount`` -> per-symbol files.
+"""One-time migration: dated bean-price files -> per-symbol files.
 
-Reads every dated price file under ``prices/``, groups all Price directives
-by commodity, writes per-symbol files via ``writer.py``, and archives the
-originals to ``prices/_archive_dated/`` (NOT deleted; rollback for free).
+Reads every dated file under ``prices/`` (matching bean-price's
+``prices-YYYY-MM-DD.bean`` and ``prices-YYYY-MM-DD.gen.bean`` shapes),
+groups all Price directives by commodity, writes per-symbol files via
+``writer.py``, and archives the originals to ``prices/_archive_dated/``
+(NOT deleted; rollback for free).
 
 The plan also asks for a verification step (reload new files, confirm
 zero errors). That's built into ``migrate_dated_prices``.

@@ -63,10 +63,11 @@ Use `--dry-run` to preview without touching the network or files.
 
 ### `migrate-dated-prices`
 
-One-time conversion of `prices/YYYY-MM-DD.beancount` files to the
-per-symbol layout this tool expects. Reads every dated file, groups
-Price directives by commodity, writes per-symbol files, and moves
-the originals to `prices/_archive_dated/` (NOT deleted — rollback
+One-time conversion of bean-price's dated price files
+(`prices/prices-YYYY-MM-DD.bean` and `prices/prices-YYYY-MM-DD.gen.bean`)
+to the per-symbol layout this tool expects. Reads every dated file,
+groups Price directives by commodity, writes per-symbol files, and
+moves the originals to `prices/_archive_dated/` (NOT deleted — rollback
 for free).
 
 ```bash
