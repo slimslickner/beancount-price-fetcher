@@ -27,7 +27,7 @@ def test_is_dated_filename_valid() -> None:
 
 
 def test_is_dated_filename_invalid() -> None:
-    assert is_dated_filename("SPY.beancount") is False
+    assert is_dated_filename("SPY.bean") is False
     assert is_dated_filename("prices-2024-01-15") is False  # no extension
     assert is_dated_filename("prices-2024-01-15.txt") is False  # wrong extension
     assert is_dated_filename("not-a-date.bean") is False
@@ -120,7 +120,7 @@ def test_migrate_dated_prices_dry_run(tmp_path: Path) -> None:
     assert result.total_prices == 2
     # Dry run: original files still in place, no per-symbol files written
     assert (src / "prices-2024-01-15.bean").exists()
-    assert (src / "SPY.beancount").exists() is False  # never written
+    assert (src / "SPY.bean").exists() is False  # never written
 
 
 def test_migrate_dated_prices_creates_per_symbol_files(tmp_path: Path) -> None:
@@ -135,8 +135,8 @@ def test_migrate_dated_prices_creates_per_symbol_files(tmp_path: Path) -> None:
     assert result.per_symbol_files_count == 2  # SPY + AAPL
     assert result.total_prices == 3
     # Per-symbol files written
-    assert (src / "SPY.beancount").exists()
-    assert (src / "AAPL.beancount").exists()
+    assert (src / "SPY.bean").exists()
+    assert (src / "AAPL.bean").exists()
     # Originals archived (not deleted)
     assert (src / "_archive_dated").exists()
     assert (src / "_archive_dated" / "prices-2024-01-15.bean").exists()
@@ -167,7 +167,7 @@ def test_migrate_dated_prices_sorts_by_date(tmp_path: Path) -> None:
     (src / "prices-2024-01-15.bean").write_text("2024-01-15 price SPY 300.00 USD\n")
     (src / "prices-2024-01-17.bean").write_text("2024-01-17 price SPY 302.00 USD\n")
     migrate_dated_prices(prices_dir=src, dry_run=False)
-    content = (src / "SPY.beancount").read_text()
+    content = (src / "SPY.bean").read_text()
     lines = [line for line in content.splitlines() if line.startswith("2024")]
     assert lines == [
         "2024-01-15 price SPY 300.00 USD",
@@ -196,7 +196,7 @@ def test_migrate_dated_prices_loads_new_layout_clean(tmp_path: Path) -> None:
     (src / "prices-2024-01-16.bean").write_text("2024-01-16 price SPY 301.00 USD\n")
     migrate_dated_prices(prices_dir=src, dry_run=False)
     # Load the migrated SPY file directly; should have zero errors
-    entries, errors, _ = load_file(str(src / "SPY.beancount"))
+    entries, errors, _ = load_file(str(src / "SPY.bean"))
     assert errors == []
     assert len(entries) == 2
 
@@ -206,7 +206,7 @@ def test_migrate_dated_prices_only_picks_dated_files(tmp_path: Path) -> None:
     src = tmp_path / "prices"
     src.mkdir()
     # Existing per-symbol file (should be left alone)
-    (src / "SPY.beancount").write_text("2024-01-01 price SPY 299.00 USD\n")
+    (src / "SPY.bean").write_text("2024-01-01 price SPY 299.00 USD\n")
     # Dated file (should be migrated)
     (src / "prices-2024-01-15.bean").write_text("2024-01-15 price SPY 300.00 USD\n")
     # Dated file for a different commodity
@@ -217,18 +217,18 @@ def test_migrate_dated_prices_only_picks_dated_files(tmp_path: Path) -> None:
     result = migrate_dated_prices(prices_dir=src, dry_run=False)
     assert result.dated_files_count == 2  # only the two 2024-* files
     # SPY.beancount now has the merged set
-    content = (src / "SPY.beancount").read_text()
+    content = (src / "SPY.bean").read_text()
     assert "2024-01-01 price SPY 299.00 USD" in content  # original kept
     assert "2024-01-15 price SPY 300.00 USD" in content  # migrated added
     # AAPL.beancount created
-    assert (src / "AAPL.beancount").exists()
+    assert (src / "AAPL.bean").exists()
 
 
 def test_dated_file_pattern_constant() -> None:
     """Pattern matches what we expect."""
     assert is_dated_filename("prices-2024-01-15.bean")
     assert is_dated_filename("prices-2024-12-31.bean")
-    assert not is_dated_filename("SPY.beancount")
+    assert not is_dated_filename("SPY.bean")
     assert not is_dated_filename("prices-2024-1-15.bean")  # not zero-padded
 
 
@@ -270,8 +270,8 @@ def test_migrate_two_dated_files_layout_exact_example(tmp_path: Path) -> None:
     assert result.total_prices == 4  # 2 commodities x 2 dates
     assert result.dry_run is False
 
-    aapl = prices / "AAPL.beancount"
-    spy = prices / "SPY.beancount"
+    aapl = prices / "AAPL.bean"
+    spy = prices / "SPY.bean"
     assert aapl.exists()
     assert spy.exists()
 
@@ -310,7 +310,7 @@ def test_migrate_two_dated_files_loads_with_zero_errors(tmp_path: Path) -> None:
     migrate_dated_prices(prices_dir=prices, dry_run=False)
 
     for commodity in ("AAPL", "SPY"):
-        entries, errors, _ = parser.parse_file(str(prices / f"{commodity}.beancount"))
+        entries, errors, _ = parser.parse_file(str(prices / f"{commodity}.bean"))
         assert errors == [], f"parse errors in {commodity}.beancount: {errors}"
         prices_only = [e for e in entries if isinstance(e, type(entries[0]))]
         assert len(prices_only) == 2
@@ -331,7 +331,7 @@ def test_migrate_two_dated_files_idempotent(tmp_path: Path) -> None:
     assert second.per_symbol_files_count == 0
     assert second.total_prices == 0
 
-    content = (prices / "AAPL.beancount").read_text()
+    content = (prices / "AAPL.bean").read_text()
     assert content.count("2026-07-22 price AAPL") == 1
     assert content.count("2026-07-23 price AAPL") == 1
 
@@ -359,7 +359,7 @@ def test_migrate_two_dated_files_dedup_same_date_two_commodities(
     assert result.total_prices == 2
 
     aapl_lines = [
-        ln for ln in (prices / "AAPL.beancount").read_text().splitlines() if ln.startswith("2026")
+        ln for ln in (prices / "AAPL.bean").read_text().splitlines() if ln.startswith("2026")
     ]
     assert aapl_lines == ["2026-07-22 price AAPL 10.00 USD"]
 
@@ -381,10 +381,10 @@ def test_migrate_two_dated_files_three_commodities(tmp_path: Path) -> None:
 
     result = migrate_dated_prices(prices_dir=prices, dry_run=False)
     assert result.per_symbol_files_count == 3
-    assert set(p.name for p in prices.iterdir() if p.suffix == ".beancount") >= {
-        "AAPL.beancount",
-        "SPY.beancount",
-        "MSFT.beancount",
+    assert set(p.name for p in prices.iterdir() if p.suffix == ".bean") >= {
+        "AAPL.bean",
+        "SPY.bean",
+        "MSFT.bean",
     }
 
 
@@ -414,9 +414,9 @@ def test_migrate_handles_gen_bean_files(tmp_path: Path) -> None:
     assert result.duplicates_warned == 2
     assert result.total_prices == 3
 
-    assert (prices / "AAPL.beancount").exists()
-    assert (prices / "SPY.beancount").exists()
-    assert (prices / "MSFT.beancount").exists()
+    assert (prices / "AAPL.bean").exists()
+    assert (prices / "SPY.bean").exists()
+    assert (prices / "MSFT.bean").exists()
 
     archive = prices / "_archive_dated"
     assert (archive / "prices-2026-07-22.bean").exists()

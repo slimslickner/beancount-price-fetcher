@@ -102,7 +102,7 @@ def test_cli_fetch_writes_per_symbol_files(runner: CliRunner, mocker, prices_dir
     # We may exit non-zero if some tickers fail in CI; for this mock, all succeed
     assert result.exit_code == 0
     written = sorted(p.name for p in prices_dir.iterdir())
-    assert "SPY.beancount" in written
+    assert "SPY.bean" in written
 
 
 def test_cli_fetch_exits_nonzero_on_failure(runner: CliRunner, mocker, prices_dir) -> None:
@@ -143,7 +143,7 @@ def test_cli_migrate_dated_prices_dry_run(runner: CliRunner, tmp_path) -> None:
     # Original still in place
     assert (prices / "prices-2024-01-15.bean").exists()
     # Per-symbol file NOT created
-    assert not (prices / "SPY.beancount").exists()
+    assert not (prices / "SPY.bean").exists()
     assert (
         "dry run" in result.output.lower()
         or "would" in result.output.lower()
@@ -166,8 +166,8 @@ def test_cli_migrate_dated_prices_moves_originals(runner: CliRunner, tmp_path) -
         ],
     )
     assert result.exit_code == 0
-    assert (prices / "SPY.beancount").exists()
-    assert (prices / "AAPL.beancount").exists()
+    assert (prices / "SPY.bean").exists()
+    assert (prices / "AAPL.bean").exists()
     archive = prices / "_archive_dated"
     assert archive.exists()
     assert (archive / "prices-2024-01-15.bean").exists()

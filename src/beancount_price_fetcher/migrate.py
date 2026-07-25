@@ -134,7 +134,7 @@ def migrate_dated_prices(
             duplicates_warned=duplicates_warned,
         )
 
-    writer = PriceWriter(prices_dir=prices_dir)
+    writer = PriceWriter(prices_dir=prices_dir, sort_output=True)
     for commodity, fp_list in by_commodity.items():
         writer.write_commodity(commodity, fp_list)
 

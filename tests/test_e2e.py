@@ -136,7 +136,7 @@ def test_e2e_no_missing_dates_after_writes(mocker: object, tmp_path: Path) -> No
     from beancount.parser import parser
 
     extra_prices: dict[str, set[date]] = {}
-    for f in (tmp_path / "prices").glob("*.beancount"):
+    for f in (tmp_path / "prices").glob("*.bean"):
         entries, _errs, _ = parser.parse_file(str(f))
         for entry in entries:
             from beancount.core import data

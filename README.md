@@ -2,8 +2,9 @@
 
 Scan a Beancount ledger for missing commodity prices and backfill them
 via [yfinance](https://github.com/ranaroussi/yfinance). Writes results
-to per-symbol price files (`prices/SPY.beancount`, `prices/AAPL.beancount`,
-...) that you `include` from your main ledger.
+to per-symbol price files (`prices/SPY.bean`, `prices/AAPL.bean`,
+...) that you `include` from your main ledger. The extension is
+configurable (default `.bean`); see `--file-extension` below.
 
 ## Install
 
@@ -27,7 +28,7 @@ uv run beanprices fetch --ledger path/to/main.beancount --prices-dir prices
 Then add to your main ledger:
 
 ```beancount
-include "prices/*.beancount"
+include "prices/*.bean"
 ```
 
 ## CLI commands
@@ -54,6 +55,7 @@ uv run beanprices fetch --ledger main.beancount --prices-dir prices \
     [--threads 4] \
     [--retries 3] \
     [--default-frequency daily] \
+    [--file-extension .bean] \
     [--commodity SPY] \
     [--since 2024-01-01]
 ```
@@ -148,9 +150,23 @@ No config file. Global defaults live in `src/beancount_price_fetcher/constants.p
 | `DEFAULT_THREAD_COUNT` | 4 |
 | `DEFAULT_RETRY_COUNT` | 3 |
 | `DEFAULT_FREQUENCY` | `Frequency.DAILY` |
+| `DEFAULT_FILE_EXTENSION` (in `writer.py`) | `.bean` |
 
 Override via CLI flags or by passing constructor args to `PriceFetcher` /
-`compute_requirements`.
+`PriceWriter` / `compute_requirements`.
+
+### Fetch behavior: append-only, no re-sort
+
+The `fetch` command is **append-only**: it does not re-sort or re-render
+existing content in a per-symbol file. New missing prices are appended at
+the end in the order returned by yfinance. This means existing hand-curated
+or otherwise-ordered lines are preserved verbatim.
+
+If you want the file sorted by date after a fetch, run a downstream tool
+like [bean-format](https://github.com/aktau/bean-format) over the
+generated files. The `migrate-dated-prices` command sorts by date
+internally (because it's writing fresh per-symbol files from scratch); the
+`fetch` command does not, by design.
 
 ## Project layout
 

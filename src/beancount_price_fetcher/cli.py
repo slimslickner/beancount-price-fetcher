@@ -20,7 +20,7 @@ from .ledger import analyze_ledger
 from .migrate import migrate_dated_prices
 from .models import FetchedPrice, Frequency
 from .requirements import compute_requirements
-from .writer import PriceWriter
+from .writer import DEFAULT_FILE_EXTENSION, PriceWriter
 
 
 @click.group()
@@ -100,6 +100,12 @@ def list_missing(
     type=click.Path(),
     help="Directory for per-symbol price files (default: prices).",
 )
+@click.option(
+    "--file-extension",
+    default=DEFAULT_FILE_EXTENSION,
+    show_default=True,
+    help="Extension for per-symbol price files (default: .bean).",
+)
 @click.option("--dry-run", is_flag=True, help="Compute what would happen; don't write or fetch.")
 @click.option(
     "--threads",
@@ -129,6 +135,7 @@ def list_missing(
 def fetch(
     ledger: str,
     prices_dir: str,
+    file_extension: str,
     dry_run: bool,
     threads: int,
     retries: int,
@@ -167,7 +174,7 @@ def fetch(
         for req, exc in failures:
             click.echo(f"  {req.commodity} ({req.ticker}): {exc}", err=True)
 
-    writer = PriceWriter(prices_dir=Path(prices_dir))
+    writer = PriceWriter(prices_dir=Path(prices_dir), file_extension=file_extension)
     by_commodity: dict[str, list[FetchedPrice]] = {}
     for fp in successes:
         by_commodity.setdefault(fp.commodity, []).append(fp)
