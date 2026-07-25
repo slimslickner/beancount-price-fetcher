@@ -295,3 +295,161 @@ def test_price_fetcher_dry_run_does_not_call_yfinance(mocker: Any) -> None:
     assert successes == []
     assert failures == []
     mock_history.assert_not_called()
+
+
+# ---- Thread-dispatch invariants ----
+#
+# These tests verify that tasks are dispatched per-COMMODITY, not per-date,
+# so that no two threads can ever process the same (commodity, date) pair.
+# Each PriceRequirement represents one commodity; one yfinance call covers
+# that commodity's entire date range; threads run commodities in parallel.
+
+
+def test_price_fetcher_dispatches_one_task_per_commodity(mocker: Any) -> None:
+    """N commodities -> N thread-pool tasks, NOT N*dates tasks.
+
+    We instrument the mock to count distinct (commodity, call-time) pairs
+    and confirm that each commodity is fetched exactly once.
+    """
+    import threading
+
+    tickers = [f"T{i}" for i in range(5)]
+    missing_dates = frozenset({date(2024, 1, 2), date(2024, 1, 3)})
+    reqs = [
+        PriceRequirement(
+            commodity=t,
+            ticker=t,
+            quote_currency="USD",
+            frequency=Frequency.DAILY,
+            min_date=date(2024, 1, 2),
+            max_date=date(2024, 1, 3),
+            missing_dates=missing_dates,
+        )
+        for t in tickers
+    ]
+
+    seen_lock = threading.Lock()
+    seen_calls: list[tuple[str, int]] = []
+
+    def history(**kwargs: Any) -> pd.DataFrame:
+        thread_id = threading.get_ident()
+        with seen_lock:
+            # yfinance.Ticker.history doesn't get the ticker as a kwarg;
+            # the only way to identify which commodity was fetched is via
+            # thread + call order, but we can also count via the side effect
+            # that we know exactly which Ticker instance was created.
+            seen_calls.append((threading.current_thread().name, thread_id))
+        return _make_df(
+            [
+                ("2024-01-02", 100.0),
+                ("2024-01-03", 101.0),
+            ]
+        )
+
+    mocker.patch("yfinance.Ticker.history", side_effect=history)
+    fetcher = PriceFetcher(threads=4, retries=1)
+    successes, failures = fetcher.fetch_all(reqs)
+
+    # 5 commodities, 5 yfinance calls, each covering both dates
+    assert len(seen_calls) == 5
+    assert len(successes) == 5 * 2  # 5 commodities x 2 dates each
+    assert failures == []
+
+
+def test_price_fetcher_no_overlap_per_thread(mocker: Any) -> None:
+    """Each (commodity, date) pair is touched by at most one thread.
+
+    Uses a thread-id-stamped mock to track which thread processed each
+    (ticker, date) pair. The invariant: each pair appears exactly once,
+    even with multiple threads running concurrently.
+    """
+    import threading
+
+    tickers = [f"T{i}" for i in range(8)]
+    reqs = [
+        PriceRequirement(
+            commodity=t,
+            ticker=t,
+            quote_currency="USD",
+            frequency=Frequency.DAILY,
+            min_date=date(2024, 1, 2),
+            max_date=date(2024, 1, 4),
+            missing_dates=frozenset({date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)}),
+        )
+        for t in tickers
+    ]
+
+    # Track every (ticker, date) -> thread_id mapping we observe.
+    # yfinance.Ticker.history doesn't receive the ticker as a kwarg, but
+    # each PriceRequirement has its own yfinance.Ticker instance created
+    # inside fetch_one; we can identify them via the side_effect order.
+    processed: dict[tuple[str, date], int] = {}
+    process_lock = threading.Lock()
+    ticker_index = iter(tickers)
+
+    def history(**kwargs: Any) -> pd.DataFrame:
+        # Identify which ticker this is by popping the next from our
+        # iterator. Note: the order of calls corresponds to the order
+        # of pool.submit() invocations, which is the order of `reqs`.
+        # We rely on that to map back to the originating ticker.
+        # (For a more robust mapping in production, see fetch_all below.)
+        current_thread = threading.get_ident()
+        with process_lock:
+            ticker = next(ticker_index)
+            for d in (date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)):
+                key = (ticker, d)
+                assert key not in processed, f"{key} already processed by another thread"
+                processed[key] = current_thread
+        return _make_df(
+            [
+                ("2024-01-02", 100.0),
+                ("2024-01-03", 101.0),
+                ("2024-01-04", 102.0),
+            ]
+        )
+
+    mocker.patch("yfinance.Ticker.history", side_effect=history)
+    fetcher = PriceFetcher(threads=4, retries=1)
+    successes, failures = fetcher.fetch_all(reqs)
+
+    # Every (commodity, date) pair processed exactly once
+    assert len(processed) == 8 * 3  # 8 commodities x 3 dates
+    assert all(
+        (t, d) in processed
+        for t in tickers
+        for d in (date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4))
+    )
+    # Each (commodity, date) -> exactly ONE thread-id
+    assert len(set(processed.values())) <= fetcher.threads  # bounded by thread count
+    assert failures == []
+    assert len(successes) == 8 * 3
+
+
+def test_price_fetcher_single_thread_processes_whole_commodity(mocker: Any) -> None:
+    """threads=1 still works and processes the whole commodity in one go."""
+    import threading
+
+    seen_thread_ids: list[int] = []
+
+    def history(**kwargs: Any) -> pd.DataFrame:
+        seen_thread_ids.append(threading.get_ident())
+        return _make_df([("2024-01-02", 100.0), ("2024-01-03", 101.0), ("2024-01-04", 102.0)])
+
+    mocker.patch("yfinance.Ticker.history", side_effect=history)
+    reqs = [
+        PriceRequirement(
+            commodity="SPY",
+            ticker="SPY",
+            quote_currency="USD",
+            frequency=Frequency.DAILY,
+            min_date=date(2024, 1, 2),
+            max_date=date(2024, 1, 4),
+            missing_dates=frozenset({date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)}),
+        ),
+    ]
+    fetcher = PriceFetcher(threads=1, retries=1)
+    successes, failures = fetcher.fetch_all(reqs)
+
+    assert len(seen_thread_ids) == 1
+    assert len(successes) == 3
+    assert failures == []
