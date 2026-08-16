@@ -215,6 +215,31 @@ def test_compute_requirements_empty_held_periods_list() -> None:
     assert reqs == []
 
 
+def test_compute_requirements_skips_commodities_without_price_metadata() -> None:
+    """A commodity held but missing `price` metadata is filtered out.
+
+    Without the filter, the fallback path would set ticker=commodity code and
+    send e.g. "VEHICLE.2014SUBARU" to yfinance -- producing noisy 404 errors
+    for things like vehicles and real estate that have no yfinance ticker.
+    """
+    held_periods: dict[str, list[HeldPeriod]] = {
+        "SPY": [HeldPeriod(date(2020, 1, 6), date(2020, 1, 10), is_open=False)],
+        "VEHICLE.2014SUBARU": [HeldPeriod(date(2020, 6, 1), date(2024, 12, 31), is_open=True)],
+    }
+    existing: dict[str, set[date]] = {}
+    metadata: dict[str, CommodityMetadata] = {
+        "SPY": CommodityMetadata("SPY", "SPY", "USD", None, None)
+    }
+    reqs = compute_requirements(
+        held_periods,
+        existing,
+        metadata,
+        Frequency.DAILY,
+        skipped_commodities=frozenset({"VEHICLE.2014SUBARU"}),
+    )
+    assert {r.commodity for r in reqs} == {"SPY"}
+
+
 def test_date_ranges_contiguous_dates_become_one_range() -> None:
     ranges = date_ranges_from_dates({date(2020, 1, 6), date(2020, 1, 7), date(2020, 1, 8)})
     assert ranges == [(date(2020, 1, 6), date(2020, 1, 8))]

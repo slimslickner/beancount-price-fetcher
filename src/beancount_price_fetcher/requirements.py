@@ -25,6 +25,7 @@ def compute_requirements(
     metadata: dict[str, CommodityMetadata],
     default_frequency: Frequency = DEFAULT_FREQUENCY,
     default_quote_currency: str = DEFAULT_QUOTE_CURRENCY,
+    skipped_commodities: frozenset[str] = frozenset(),
 ) -> list[PriceRequirement]:
     """Build the list of ``PriceRequirement`` for every commodity needing prices.
 
@@ -35,6 +36,9 @@ def compute_requirements(
         default_frequency: Used when a commodity has no ``price-frequency`` override.
         default_quote_currency: Quote currency for the no-metadata fallback
             (commodity code as ticker).
+        skipped_commodities: Commodities whose ``Commodity`` directive has
+            no ``price`` metadata; they are held but not fetchable and are
+            silently excluded from the result.
 
     Returns:
         A list of ``PriceRequirement`` -- one per commodity with non-empty
@@ -43,6 +47,8 @@ def compute_requirements(
     out: list[PriceRequirement] = []
     for commodity, periods in held_periods.items():
         if not periods:
+            continue
+        if commodity in skipped_commodities:
             continue
         meta = metadata.get(commodity)
         frequency = (meta.frequency if meta else None) or default_frequency

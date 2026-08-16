@@ -85,6 +85,34 @@ def test_extract_commodity_metadata_no_commodity_directive() -> None:
     assert "MSFT" not in meta
 
 
+def test_extract_commodity_metadata_skips_commodity_without_price_metadata(
+    tmp_path: Path,
+) -> None:
+    """A Commodity directive without `price` metadata is not fetchable.
+
+    Such commodities (vehicles, real estate, etc.) should be skipped rather
+    than have their commodity code passed to yfinance as a fake ticker.
+    """
+    ledger = (
+        'option "title" "test"\n'
+        'option "operating_currency" "USD"\n'
+        "\n"
+        "2024-01-01 commodity SPY\n"
+        '  price: "USD:yahoo/SPY"\n'
+        "\n"
+        "2024-01-01 commodity VEHICLE.2014SUBARU\n"
+        '  name: "2014 Subaru Crosstrek"\n'
+        '  asset_class: "vehicle"\n'
+    )
+    ledger_path = tmp_path / "test.beancount"
+    ledger_path.write_text(ledger)
+
+    analysis = analyze_ledger(ledger_path)
+    assert "SPY" in analysis.metadata
+    assert "VEHICLE.2014SUBARU" not in analysis.metadata
+    assert "VEHICLE.2014SUBARU" in analysis.skipped_commodities
+
+
 # ---- Held period tests (multi-period aware) ----
 
 
@@ -143,6 +171,26 @@ def test_held_periods_excludes_operating_currency() -> None:
     """USD (operating currency) should never appear in held periods."""
     periods = compute_held_periods(*_load_fixture_with_today())
     assert "USD" not in periods
+
+
+def test_analyze_ledger_reports_skipped_commodities(tmp_path: Path) -> None:
+    """skipped_commodities lists every commodity with a Commodity directive
+    but no `price` metadata, so callers know why a held commodity is silent."""
+    ledger = (
+        'option "title" "test"\n'
+        'option "operating_currency" "USD"\n'
+        "\n"
+        "2024-01-01 commodity SPY\n"
+        '  price: "USD:yahoo/SPY"\n'
+        "\n"
+        "2024-01-01 commodity HOUSE\n"
+        '  asset_class: "real_estate"\n'
+    )
+    ledger_path = tmp_path / "test.beancount"
+    ledger_path.write_text(ledger)
+
+    analysis = analyze_ledger(ledger_path)
+    assert analysis.skipped_commodities == frozenset({"HOUSE"})
 
 
 @freeze_time(FROZEN_TODAY)

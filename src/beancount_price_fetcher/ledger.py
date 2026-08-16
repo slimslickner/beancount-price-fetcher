@@ -35,6 +35,7 @@ class LedgerAnalysis:
     operating_currencies: frozenset[str] = field(default_factory=frozenset)
     today: date = field(default_factory=date.today)
     display_precision: dict[str, Decimal] = field(default_factory=dict)
+    skipped_commodities: frozenset[str] = field(default_factory=frozenset)
 
 
 def analyze_ledger(path: str | Path, today: date | None = None) -> LedgerAnalysis:
@@ -65,13 +66,15 @@ def analyze_ledger(path: str | Path, today: date | None = None) -> LedgerAnalysi
     ref_today = today if today is not None else date.today()
     operating_currencies = frozenset(options.get("operating_currency", ["USD"]))
 
+    metadata = extract_commodity_metadata(entries)
     return LedgerAnalysis(
-        metadata=extract_commodity_metadata(entries),
+        metadata=metadata,
         held_periods=compute_held_periods(entries, operating_currencies, ref_today),
         existing_prices=extract_existing_prices(entries),
         operating_currencies=operating_currencies,
         today=ref_today,
         display_precision=dict(options.get("display_precision", {})),
+        skipped_commodities=_collect_skipped_commodities(entries, metadata),
     )
 
 
@@ -82,6 +85,12 @@ def extract_commodity_metadata(entries: list[Any]) -> dict[str, CommodityMetadat
     extract ticker and quote currency. Recognised optional override keys:
     ``price-frequency`` (Frequency enum value) and ``price-start-date``
     (datetime.date).
+
+    Commodities whose ``Commodity`` directive has no ``price`` metadata are
+    NOT included in the returned dict — there is no yfinance ticker to fetch
+    for them, and falling back to the commodity code as a ticker produces
+    spurious 404/no-data noise. Pair with ``_collect_skipped_commodities`` to
+    retain the set for reporting.
     """
     out: dict[str, CommodityMetadata] = {}
     for entry in entries:
@@ -91,10 +100,14 @@ def extract_commodity_metadata(entries: list[Any]) -> dict[str, CommodityMetadat
         meta = entry.meta or {}
 
         price_str = meta.get("price")
-        if price_str is not None:
-            quote_currency, ticker = _parse_price_string(str(price_str))
-        else:
-            quote_currency, ticker = "USD", commodity
+        if price_str is None:
+            logger.debug(
+                "commodity %s has no `price` metadata; skipping price fetch",
+                commodity,
+            )
+            continue
+
+        quote_currency, ticker = _parse_price_string(str(price_str))
 
         frequency = _parse_frequency(meta.get("price-frequency"))
         start_date = meta.get("price-start-date")
@@ -109,6 +122,22 @@ def extract_commodity_metadata(entries: list[Any]) -> dict[str, CommodityMetadat
             price_start_date=start_date,
         )
     return out
+
+
+def _collect_skipped_commodities(
+    entries: list[Any], metadata: dict[str, CommodityMetadata]
+) -> frozenset[str]:
+    """Find commodities with a ``Commodity`` directive but no ``price`` metadata.
+
+    These commodities are recognised in the ledger but intentionally not
+    fetched (e.g. real-estate, vehicles). The returned set lets callers
+    report on them or filter them out of the requirements pipeline.
+    """
+    declared: set[str] = set()
+    for entry in entries:
+        if isinstance(entry, data.Commodity):
+            declared.add(entry.currency)
+    return frozenset(declared - set(metadata.keys()))
 
 
 def compute_held_periods(

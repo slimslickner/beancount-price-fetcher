@@ -69,10 +69,15 @@ def list_missing(
         analysis.existing_prices,
         analysis.metadata,
         default_frequency=Frequency(default_frequency),
+        skipped_commodities=analysis.skipped_commodities,
     )
     click.echo(f"Ledger: {ledger}")
     click.echo(f"Operating currencies: {', '.join(sorted(analysis.operating_currencies))}")
     click.echo(f"Today: {analysis.today.isoformat()}")
+    if analysis.skipped_commodities:
+        click.echo(
+            f"Skipped (no `price` metadata): {', '.join(sorted(analysis.skipped_commodities))}"
+        )
     click.echo("")
     click.echo(f"{'commodity':12} {'missing':>8}  {'min_date':12} {'max_date':12} {'ticker':12}")
     for req in sorted(reqs, key=lambda r: r.commodity):
@@ -150,6 +155,7 @@ def fetch(
         analysis.existing_prices,
         analysis.metadata,
         default_frequency=Frequency(default_frequency),
+        skipped_commodities=analysis.skipped_commodities,
     )
     if commodity is not None:
         reqs = [r for r in reqs if r.commodity == commodity]
@@ -157,6 +163,10 @@ def fetch(
         since_date: date = since.date()
         reqs = [r for r in reqs if r.max_date >= since_date]
     click.echo(f"Found {len(reqs)} commodity(ies) needing prices.")
+    if analysis.skipped_commodities:
+        click.echo(
+            f"Skipped (no `price` metadata): {', '.join(sorted(analysis.skipped_commodities))}"
+        )
     if dry_run:
         click.echo("Dry run: skipping fetch.")
         for r in sorted(reqs, key=lambda x: x.commodity):
