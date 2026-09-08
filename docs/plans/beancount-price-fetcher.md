@@ -249,6 +249,14 @@ bean-price already uses:
   returns all trading days in the range; only keep the ones you asked for
   to avoid accidentally re-deriving dates you already have from another
   source).
+- **Closing-prices safeguard**: pass `interval="1d"` explicitly and drop
+  any row whose date equals `date.today()` (in `_dataframe_to_prices`).
+  yfinance's daily bar for the current open trading day carries the
+  running intraday snapshot as its `Close`, not the day's actual close
+  — emitting it would silently corrupt beancount's cost-basis / gains
+  math. The filter is on by default; `--include-today` on the CLI
+  bypasses it with a logged warning. Full design:
+  `docs/plans/closing-prices.md`.
 
 ### 4.5 `writer.py` — Writing Price directives
 

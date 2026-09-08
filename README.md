@@ -57,11 +57,21 @@ uv run beanprices fetch --ledger main.beancount --prices-dir prices \
     [--default-frequency daily] \
     [--file-extension .bean] \
     [--commodity SPY] \
-    [--since 2024-01-01]
+    [--since 2024-01-01] \
+    [--end-date 2024-12-31] \
+    [--include-today]
 ```
 
 Exits non-zero if any ticker fails after all retries — safe for cron/CI.
 Use `--dry-run` to preview without touching the network or files.
+
+By default, the fetcher **drops any row whose date equals today** to
+avoid emitting an intraday snapshot for an open trading day — only
+end-of-day closes are written. Re-run after market close (or on the
+next calendar day) to capture today's close, or pass `--include-today`
+to bypass the filter (logged as a warning). `--end-date` caps the
+yfinance fetch window for reproducible cron runs
+(`--end-date "$(date -v-1d +%F)"`).
 
 ### `migrate-dated-prices`
 

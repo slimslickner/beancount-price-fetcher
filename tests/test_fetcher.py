@@ -52,6 +52,35 @@ def test_dataframe_to_prices_datetime_index_preserves_date() -> None:
     assert prices[0].date == date(2024, 1, 2)
 
 
+def test_dataframe_to_prices_drops_today_row() -> None:
+    """When ``today`` is passed, any row whose date == today is dropped."""
+    df = _make_df([("2024-01-02", 300.0), ("2024-01-03", 301.0)])
+    prices = _dataframe_to_prices(df, commodity="SPY", quote_currency="USD", today=date(2024, 1, 3))
+    assert [p.date for p in prices] == [date(2024, 1, 2)]
+
+
+def test_dataframe_to_prices_keeps_rows_when_today_is_none() -> None:
+    """``today=None`` (default) means no filter — all rows kept."""
+    df = _make_df([("2024-01-02", 300.0), ("2024-01-03", 301.0)])
+    prices = _dataframe_to_prices(df, commodity="SPY", quote_currency="USD")
+    assert [p.date for p in prices] == [date(2024, 1, 2), date(2024, 1, 3)]
+
+
+def test_dataframe_to_prices_handles_tz_aware_index() -> None:
+    """Tz-aware index (yfinance default for daily bars) preserves exchange-local date.
+
+    yfinance returns daily bars with midnight timestamps in the exchange's
+    timezone (e.g., America/New_York for US stocks). The extracted date
+    must be the exchange-local calendar date, not UTC. If this invariant
+    breaks, today's filter would silently miss intraday rows.
+    """
+    idx = pd.DatetimeIndex(["2025-09-12 00:00:00"], tz="America/New_York")
+    df = pd.DataFrame({"Close": [657.41]}, index=idx)
+    df.index.name = "Date"
+    prices = _dataframe_to_prices(df, commodity="SPY", quote_currency="USD")
+    assert prices[0].date == date(2025, 9, 12)
+
+
 def test_fetch_one_returns_prices_for_missing_dates(
     mocker: Any,
 ) -> None:
@@ -80,6 +109,111 @@ def test_fetch_one_returns_prices_for_missing_dates(
     assert len(prices) == 3
     dates = {p.date for p in prices}
     assert dates == {date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)}
+
+
+def test_fetch_one_passes_explicit_daily_interval(mocker: Any) -> None:
+    """``interval=\"1d\"`` is passed explicitly to yfinance (defends against version drift)."""
+    req = PriceRequirement(
+        commodity="SPY",
+        ticker="SPY",
+        quote_currency="USD",
+        frequency=Frequency.DAILY,
+        min_date=date(2024, 1, 2),
+        max_date=date(2024, 1, 3),
+        missing_dates=frozenset({date(2024, 1, 2)}),
+    )
+    mock_history = mocker.patch("yfinance.Ticker.history")
+    mock_history.return_value = _make_df([("2024-01-02", 300.0)])
+    fetch_one(req, retries=1)
+    assert mock_history.call_count == 1
+    _, kwargs = mock_history.call_args
+    assert kwargs.get("interval") == "1d"
+
+
+def test_fetch_one_drops_today_from_results(mocker: Any) -> None:
+    """When ``today`` is set, a row whose date == today is excluded from the result."""
+    from freezegun import freeze_time
+
+    with freeze_time("2024-06-03"):
+        today = date(2024, 6, 3)
+        req = PriceRequirement(
+            commodity="SPY",
+            ticker="SPY",
+            quote_currency="USD",
+            frequency=Frequency.DAILY,
+            min_date=date(2024, 6, 1),
+            max_date=date(2024, 6, 5),
+            missing_dates=frozenset({date(2024, 6, 1), date(2024, 6, 2), date(2024, 6, 3)}),
+        )
+        mock_history = mocker.patch("yfinance.Ticker.history")
+        mock_history.return_value = _make_df(
+            [
+                ("2024-06-01", 100.0),
+                ("2024-06-02", 101.0),
+                ("2024-06-03", 999.0),  # would be intraday snapshot; should be dropped
+            ]
+        )
+        prices, exc = fetch_one(req, retries=1, today=today)
+    assert exc is None
+    dates = {p.date for p in prices}
+    assert date(2024, 6, 3) not in dates
+    assert dates == {date(2024, 6, 1), date(2024, 6, 2)}
+
+
+def test_fetch_one_keeps_today_when_today_is_none(mocker: Any) -> None:
+    """``today=None`` (no filter) keeps today's row — legacy / opt-in behavior."""
+    req = PriceRequirement(
+        commodity="SPY",
+        ticker="SPY",
+        quote_currency="USD",
+        frequency=Frequency.DAILY,
+        min_date=date(2024, 6, 1),
+        max_date=date(2024, 6, 3),
+        missing_dates=frozenset({date(2024, 6, 3)}),
+    )
+    mock_history = mocker.patch("yfinance.Ticker.history")
+    mock_history.return_value = _make_df([("2024-06-03", 999.0)])
+    prices, exc = fetch_one(req, retries=1, today=None)
+    assert exc is None
+    assert {p.date for p in prices} == {date(2024, 6, 3)}
+
+
+def test_fetch_one_caps_end_at_end_date(mocker: Any) -> None:
+    """When ``end_date`` is set, yfinance is called with ``end=end_date+1 day`` at most."""
+    req = PriceRequirement(
+        commodity="SPY",
+        ticker="SPY",
+        quote_currency="USD",
+        frequency=Frequency.DAILY,
+        min_date=date(2024, 1, 2),
+        max_date=date(2025, 12, 31),  # open-ended req max_date
+        missing_dates=frozenset({date(2024, 1, 2)}),
+    )
+    mock_history = mocker.patch("yfinance.Ticker.history")
+    mock_history.return_value = _make_df([("2024-01-02", 300.0)])
+    fetch_one(req, retries=1, end_date=date(2024, 6, 1))
+    assert mock_history.call_count == 1
+    _, kwargs = mock_history.call_args
+    # yfinance's `end` is exclusive; we pass end_date + 1 day.
+    assert kwargs.get("end") == "2024-06-02"
+
+
+def test_fetch_one_no_end_date_uses_req_max_date(mocker: Any) -> None:
+    """When ``end_date`` is None, yfinance end is req.max_date + 1 day (legacy)."""
+    req = PriceRequirement(
+        commodity="SPY",
+        ticker="SPY",
+        quote_currency="USD",
+        frequency=Frequency.DAILY,
+        min_date=date(2024, 1, 2),
+        max_date=date(2024, 6, 1),
+        missing_dates=frozenset({date(2024, 1, 2)}),
+    )
+    mock_history = mocker.patch("yfinance.Ticker.history")
+    mock_history.return_value = _make_df([("2024-01-02", 300.0)])
+    fetch_one(req, retries=1)
+    _, kwargs = mock_history.call_args
+    assert kwargs.get("end") == "2024-06-02"
 
 
 def test_fetch_one_returns_empty_when_no_data(mocker: Any) -> None:
@@ -453,3 +587,69 @@ def test_price_fetcher_single_thread_processes_whole_commodity(mocker: Any) -> N
     assert len(seen_thread_ids) == 1
     assert len(successes) == 3
     assert failures == []
+
+
+# ---- Closing-prices: today-filter threaded through fetch_all ----
+
+
+def test_fetch_all_drops_today_across_all_threads(mocker: Any) -> None:
+    """``today`` is honored per-thread: no thread emits a today-priced FetchedPrice."""
+    from freezegun import freeze_time
+
+    with freeze_time("2024-06-03"):
+        today = date(2024, 6, 3)
+        tickers = [f"T{i}" for i in range(6)]
+        reqs = [
+            PriceRequirement(
+                commodity=t,
+                ticker=t,
+                quote_currency="USD",
+                frequency=Frequency.DAILY,
+                min_date=date(2024, 6, 1),
+                max_date=date(2024, 6, 5),
+                missing_dates=frozenset({date(2024, 6, 1), date(2024, 6, 2), date(2024, 6, 3)}),
+            )
+            for t in tickers
+        ]
+
+        def history(**kwargs: Any) -> pd.DataFrame:
+            return _make_df(
+                [
+                    ("2024-06-01", 100.0),
+                    ("2024-06-02", 101.0),
+                    ("2024-06-03", 999.0),  # intraday snapshot; must be dropped
+                ]
+            )
+
+        mocker.patch("yfinance.Ticker.history", side_effect=history)
+        fetcher = PriceFetcher(threads=4, retries=1)
+        successes, failures = fetcher.fetch_all(reqs, today=today)
+
+    assert failures == []
+    assert len(successes) == 6 * 2  # 6 commodities x 2 non-today dates
+    for fp in successes:
+        assert fp.date != today
+
+
+def test_fetch_all_threads_end_date_into_each_call(mocker: Any) -> None:
+    """``end_date`` is honored per-thread: yfinance end is capped everywhere."""
+    reqs = [
+        PriceRequirement(
+            commodity=f"T{i}",
+            ticker=f"T{i}",
+            quote_currency="USD",
+            frequency=Frequency.DAILY,
+            min_date=date(2024, 1, 2),
+            max_date=date(2025, 12, 31),
+            missing_dates=frozenset({date(2024, 1, 2)}),
+        )
+        for i in range(4)
+    ]
+    mock_history = mocker.patch("yfinance.Ticker.history")
+    mock_history.return_value = _make_df([("2024-01-02", 300.0)])
+    fetcher = PriceFetcher(threads=3, retries=1)
+    fetcher.fetch_all(reqs, end_date=date(2024, 6, 1))
+    assert mock_history.call_count == 4
+    for call in mock_history.call_args_list:
+        _, kwargs = call
+        assert kwargs.get("end") == "2024-06-02"
