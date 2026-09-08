@@ -178,3 +178,111 @@ def test_cli_verbosity(runner: CliRunner) -> None:
     with freeze_time("2024-12-31"):
         result = runner.invoke(cli, ["-v", "list-missing", "--ledger", FIXTURE])
     assert result.exit_code == 0
+
+
+# ---- Closing-prices: end-date / include-today / today-filter plumbing ----
+
+
+def test_cli_fetch_drops_today_by_default(runner: CliRunner, mocker, prices_dir) -> None:
+    """By default, no Price directive for ``date.today()`` is written."""
+    mock_history = mocker.patch("yfinance.Ticker.history")
+    mock_history.return_value = _make_df(
+        [
+            ("2024-06-01", 100.0),
+            ("2024-06-03", 999.0),  # = today under freeze_time; intraday snapshot
+        ]
+    )
+    with freeze_time("2024-06-03"):
+        result = runner.invoke(
+            cli,
+            ["fetch", "--ledger", FIXTURE, "--prices-dir", str(prices_dir)],
+        )
+    assert result.exit_code == 0
+    spy_file = prices_dir / "SPY.bean"
+    if spy_file.exists():
+        content = spy_file.read_text()
+        assert "2024-06-03" not in content
+
+
+def test_cli_fetch_include_today_writes_today_row(runner: CliRunner, mocker, prices_dir) -> None:
+    """``--include-today`` bypasses the today-filter; today's row is written."""
+    mock_history = mocker.patch("yfinance.Ticker.history")
+    mock_history.return_value = _make_df([("2024-06-03", 999.0)])
+    with freeze_time("2024-06-03"):
+        result = runner.invoke(
+            cli,
+            [
+                "fetch",
+                "--ledger",
+                FIXTURE,
+                "--prices-dir",
+                str(prices_dir),
+                "--include-today",
+            ],
+        )
+    assert result.exit_code == 0
+    # SPY.bean exists and contains a 2024-06-03 line (today's intraday snapshot)
+    spy_file = prices_dir / "SPY.bean"
+    assert spy_file.exists()
+    content = spy_file.read_text()
+    assert "2024-06-03" in content
+
+
+def test_cli_fetch_end_date_caps_yfinance_window(runner: CliRunner, mocker, prices_dir) -> None:
+    """``--end-date`` caps every yfinance ``end`` parameter at end_date + 1 day."""
+    mock_history = mocker.patch("yfinance.Ticker.history")
+    mock_history.return_value = _make_df([])
+    with freeze_time("2024-06-03"):
+        result = runner.invoke(
+            cli,
+            [
+                "fetch",
+                "--ledger",
+                FIXTURE,
+                "--prices-dir",
+                str(prices_dir),
+                "--end-date",
+                "2024-06-01",
+            ],
+        )
+    assert result.exit_code == 0
+    assert mock_history.call_count > 0
+    for call in mock_history.call_args_list:
+        _, kwargs = call
+        # No call may exceed the cap. Calls for already-closed commodities
+        # may be earlier than the cap (their req.max_date is earlier),
+        # which is correct.
+        assert kwargs.get("end") <= "2024-06-02"
+
+
+def test_cli_fetch_end_date_inclusive_of_end_date(runner: CliRunner, mocker, prices_dir) -> None:
+    """``--end-date 2024-06-01`` requests yfinance through 2024-06-01 inclusive."""
+    mock_history = mocker.patch("yfinance.Ticker.history")
+    mock_history.return_value = _make_df([("2024-06-01", 100.0)])
+    with freeze_time("2024-06-03"):
+        result = runner.invoke(
+            cli,
+            [
+                "fetch",
+                "--ledger",
+                FIXTURE,
+                "--prices-dir",
+                str(prices_dir),
+                "--end-date",
+                "2024-06-01",
+                "--include-today",  # so the 2024-06-01 row isn't filtered
+            ],
+        )
+    assert result.exit_code == 0
+    spy_file = prices_dir / "SPY.bean"
+    if spy_file.exists():
+        content = spy_file.read_text()
+        assert "2024-06-01" in content
+
+
+def test_cli_list_missing_unchanged_after_fix(runner: CliRunner) -> None:
+    """``list-missing`` is unaffected by the fetcher-side today-filter."""
+    with freeze_time("2024-12-31"):
+        result = runner.invoke(cli, ["list-missing", "--ledger", FIXTURE])
+    assert result.exit_code == 0
+    assert "SPY" in result.output

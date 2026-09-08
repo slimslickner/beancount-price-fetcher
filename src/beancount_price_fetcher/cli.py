@@ -22,6 +22,8 @@ from .models import FetchedPrice, Frequency
 from .requirements import compute_requirements
 from .writer import DEFAULT_FILE_EXTENSION, PriceWriter
 
+logger = logging.getLogger(__name__)
+
 
 @click.group()
 @click.version_option(__version__, prog_name="beanprices")
@@ -137,6 +139,18 @@ def list_missing(
     type=click.DateTime(formats=["%Y-%m-%d"]),
     help="Only consider missing dates >= this date.",
 )
+@click.option(
+    "--end-date",
+    default=None,
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="Inclusive upper bound on the fetched range (default: today).",
+)
+@click.option(
+    "--include-today",
+    is_flag=True,
+    default=False,
+    help="Include today's price even if the market is still open (intraday snapshot).",
+)
 def fetch(
     ledger: str,
     prices_dir: str,
@@ -147,6 +161,8 @@ def fetch(
     default_frequency: str,
     commodity: str | None,
     since: datetime | None,
+    end_date: datetime | None,
+    include_today: bool,
 ) -> None:
     """Run the full pipeline: analyze -> fetch -> write."""
     analysis = analyze_ledger(ledger)
@@ -176,8 +192,17 @@ def fetch(
             )
         return
 
+    today_arg: date | None = None if include_today else date.today()
+    if include_today:
+        logger.warning(
+            "--include-today: today's price may be an intraday snapshot if the market is still open"
+        )
+    end_date_arg: date | None = end_date.date() if end_date is not None else None
+
     fetcher = PriceFetcher(threads=threads, retries=retries)
-    successes, failures = fetcher.fetch_all(reqs, dry_run=False)
+    successes, failures = fetcher.fetch_all(
+        reqs, dry_run=False, today=today_arg, end_date=end_date_arg
+    )
     click.echo(f"Fetched {len(successes)} prices.")
     if failures:
         click.echo(f"Failed: {len(failures)} ticker(s):", err=True)
