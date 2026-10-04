@@ -382,8 +382,8 @@ def test_cli_fetch_metadata_write_adds_metadata(runner: CliRunner, mocker, tmp_p
     result = runner.invoke(cli, ["fetch-metadata", "--ledger", str(ledger), "--write"])
     assert result.exit_code == 0
     text = ledger.read_text()
-    assert 'name: "Apple Inc."' in text
-    assert "industry" in text
+    assert 'yf_name: "Apple Inc."' in text
+    assert "yf_industry" in text
     # New directive for the held, undeclared MSFT goes to commodities.bean.
     output = tmp_path / "commodities.bean"
     assert output.exists()
@@ -396,13 +396,13 @@ def test_cli_fetch_metadata_keys_restricts_adds(runner: CliRunner, mocker, tmp_p
     ledger = _copy_metadata_ledger(tmp_path)
     result = runner.invoke(
         cli,
-        ["fetch-metadata", "--ledger", str(ledger), "--write", "--keys", "name"],
+        ["fetch-metadata", "--ledger", str(ledger), "--write", "--keys", "yf_name"],
     )
     assert result.exit_code == 0
     text = ledger.read_text()
     # AAPL's empty hand-written sector stays empty; only name is considered.
-    assert 'sector: ""' in text
-    assert 'sector: "Technology"' not in text
+    assert 'yf_sector: ""' in text
+    assert 'yf_sector: "Technology"' not in text
 
 
 def test_cli_fetch_metadata_refresh_updates_value(runner: CliRunner, mocker, tmp_path) -> None:
@@ -410,10 +410,10 @@ def test_cli_fetch_metadata_refresh_updates_value(runner: CliRunner, mocker, tmp
     ledger = _copy_metadata_ledger(tmp_path)
     result = runner.invoke(
         cli,
-        ["fetch-metadata", "--ledger", str(ledger), "--write", "--refresh", "--keys", "sector"],
+        ["fetch-metadata", "--ledger", str(ledger), "--write", "--refresh", "--keys", "yf_sector"],
     )
     assert result.exit_code == 0
-    assert 'sector: "Technology"' in ledger.read_text()
+    assert 'yf_sector: "Technology"' in ledger.read_text()
 
 
 def test_cli_fetch_metadata_without_refresh_leaves_existing(
@@ -421,10 +421,12 @@ def test_cli_fetch_metadata_without_refresh_leaves_existing(
 ) -> None:
     _install_metadata_ticker(mocker)
     ledger = _copy_metadata_ledger(tmp_path)
-    runner.invoke(cli, ["fetch-metadata", "--ledger", str(ledger), "--write", "--keys", "sector"])
+    runner.invoke(
+        cli, ["fetch-metadata", "--ledger", str(ledger), "--write", "--keys", "yf_sector"]
+    )
     # Without --refresh the empty existing sector is untouched, and the absent
     # name/asset-class are not selected.
-    assert 'sector: ""' in ledger.read_text()
+    assert 'yf_sector: ""' in ledger.read_text()
 
 
 def test_cli_fetch_metadata_exits_nonzero_on_lookup_failure(
@@ -477,11 +479,11 @@ def test_cli_fetch_metadata_edits_included_file(runner: CliRunner, mocker, tmp_p
     )
     main_before = main.read_text()
     result = runner.invoke(
-        cli, ["fetch-metadata", "--ledger", str(main), "--write", "--keys", "name"]
+        cli, ["fetch-metadata", "--ledger", str(main), "--write", "--keys", "yf_name"]
     )
     assert result.exit_code == 0
     assert main.read_text() == main_before
-    assert 'name: "SPDR S&P 500 ETF Trust"' in holdings.read_text()
+    assert 'yf_name: "SPDR S&P 500 ETF Trust"' in holdings.read_text()
     # The edited ledger still loads cleanly.
     from beancount.loader import load_file
 

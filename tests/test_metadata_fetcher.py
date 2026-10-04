@@ -21,7 +21,7 @@ from beancount_price_fetcher.metadata_fetcher import (
 )
 from beancount_price_fetcher.models import CommodityInfo, MetadataStatus
 
-ALL_KEYS = ("name", "asset-class", "sector", "industry", "category")
+ALL_KEYS = ("yf_name", "yf_asset_class", "yf_sector", "yf_industry", "yf_category")
 
 
 # ---- quoteType routing ----
@@ -141,11 +141,11 @@ def test_plan_adds_absent_keys() -> None:
         "SPY", {}, CommodityInfo(name="SPY", asset_class="Equity"), ALL_KEYS, refresh=False
     )
     assert plan.status is MetadataStatus.FILLED
-    assert plan.adds == (("name", "SPY"), ("asset-class", "Equity"))
+    assert plan.adds == (("yf_name", "SPY"), ("yf_asset_class", "Equity"))
 
 
 def test_plan_leaves_existing_values_untouched_without_refresh() -> None:
-    existing = {"name": "Hand written"}
+    existing = {"yf_name": "Hand written"}
     plan = plan_metadata_changes(
         "SPY",
         existing,
@@ -153,32 +153,32 @@ def test_plan_leaves_existing_values_untouched_without_refresh() -> None:
         ALL_KEYS,
         refresh=False,
     )
-    assert ("name", "Provider name") not in plan.adds
-    assert plan.adds == (("asset-class", "Equity"),)
+    assert ("yf_name", "Provider name") not in plan.adds
+    assert plan.adds == (("yf_asset_class", "Equity"),)
 
 
 def test_plan_treats_empty_string_as_present() -> None:
     plan = plan_metadata_changes(
-        "AAPL", {"sector": ""}, CommodityInfo(sector="Technology"), ALL_KEYS, refresh=False
+        "AAPL", {"yf_sector": ""}, CommodityInfo(sector="Technology"), ALL_KEYS, refresh=False
     )
-    assert ("sector", "Technology") not in plan.adds
+    assert ("yf_sector", "Technology") not in plan.adds
     assert plan.updates == ()
 
 
 def test_plan_refresh_replaces_changed_value() -> None:
     plan = plan_metadata_changes(
-        "AAPL", {"sector": "Tech"}, CommodityInfo(sector="Technology"), ALL_KEYS, refresh=True
+        "AAPL", {"yf_sector": "Tech"}, CommodityInfo(sector="Technology"), ALL_KEYS, refresh=True
     )
     assert plan.status is MetadataStatus.UPDATED
-    assert plan.updates == (("sector", "Tech", "Technology"),)
+    assert plan.updates == (("yf_sector", "Tech", "Technology"),)
 
 
 def test_plan_refresh_equal_value_is_unchanged() -> None:
     plan = plan_metadata_changes(
         "AAPL",
-        {"sector": "Technology"},
+        {"yf_sector": "Technology"},
         CommodityInfo(sector="Technology"),
-        ("sector",),
+        ("yf_sector",),
         refresh=True,
     )
     assert plan.status is MetadataStatus.UNCHANGED
@@ -187,7 +187,7 @@ def test_plan_refresh_equal_value_is_unchanged() -> None:
 
 def test_plan_provider_empty_never_blanks_existing() -> None:
     plan = plan_metadata_changes(
-        "AAPL", {"sector": "Technology"}, CommodityInfo(), ("sector",), refresh=True
+        "AAPL", {"yf_sector": "Technology"}, CommodityInfo(), ("yf_sector",), refresh=True
     )
     assert plan.status is MetadataStatus.NOT_FOUND
     assert plan.updates == ()
@@ -196,7 +196,11 @@ def test_plan_provider_empty_never_blanks_existing() -> None:
 
 def test_plan_partial_when_some_selected_keys_unavailable() -> None:
     plan = plan_metadata_changes(
-        "SPY", {"name": "SPY"}, CommodityInfo(name="SPY"), ("name", "sector"), refresh=False
+        "SPY",
+        {"yf_name": "SPY"},
+        CommodityInfo(name="SPY"),
+        ("yf_name", "yf_sector"),
+        refresh=False,
     )
     assert plan.status is MetadataStatus.PARTIAL
     assert plan.adds == ()
@@ -205,17 +209,17 @@ def test_plan_partial_when_some_selected_keys_unavailable() -> None:
 
 def test_plan_keys_restrict_adding() -> None:
     plan = plan_metadata_changes(
-        "SPY", {}, CommodityInfo(name="SPY", sector="Technology"), ("sector",), refresh=False
+        "SPY", {}, CommodityInfo(name="SPY", sector="Technology"), ("yf_sector",), refresh=False
     )
-    assert plan.adds == (("sector", "Technology"),)
+    assert plan.adds == (("yf_sector", "Technology"),)
 
 
 def test_plan_keys_restrict_updating() -> None:
-    existing = {"name": "Old", "sector": "Old"}
+    existing = {"yf_name": "Old", "yf_sector": "Old"}
     plan = plan_metadata_changes(
-        "SPY", existing, CommodityInfo(name="New", sector="New"), ("sector",), refresh=True
+        "SPY", existing, CommodityInfo(name="New", sector="New"), ("yf_sector",), refresh=True
     )
-    assert plan.updates == (("sector", "Old", "New"),)
+    assert plan.updates == (("yf_sector", "Old", "New"),)
 
 
 # ---- lookup + orchestrator (mocked yfinance) ----

@@ -6,12 +6,13 @@ command is run ad hoc rather than on a schedule.
 
 Routing is driven by ``info["quoteType"]``:
 
-* ``EQUITY`` -> name, asset-class ``Equity``, sector, industry
-* ``ETF``/``MUTUALFUND`` -> name, category, and an asset-class inferred from
-  the fund breakdown when one position dominates (>= 80%). Sector/industry
-  are never set for funds.
-* ``CRYPTOCURRENCY`` -> name, asset-class ``Crypto``
-* anything else -> name only
+* ``EQUITY`` -> ``yf_name``, ``yf_asset_class`` = Equity, ``yf_sector``,
+  ``yf_industry``
+* ``ETF``/``MUTUALFUND`` -> ``yf_name``, ``yf_category``, and ``yf_asset_class``
+  inferred from the fund breakdown when one position dominates (>= 80%).
+  Sector/industry are never set for funds.
+* ``CRYPTOCURRENCY`` -> ``yf_name``, ``yf_asset_class`` = Crypto
+* anything else -> ``yf_name`` only
 
 ``funds_data`` is unreliable; any exception while reading it means "no fund
 breakdown", not a lookup failure. A network error on ``Ticker.info`` is a
@@ -40,11 +41,11 @@ from .models import CommodityInfo, MetadataPlan, MetadataStatus
 logger = logging.getLogger(__name__)
 
 _KEY_TO_ATTR: dict[str, str] = {
-    "name": "name",
-    "asset-class": "asset_class",
-    "sector": "sector",
-    "industry": "industry",
-    "category": "category",
+    "yf_name": "name",
+    "yf_asset_class": "asset_class",
+    "yf_sector": "sector",
+    "yf_industry": "industry",
+    "yf_category": "category",
 }
 
 _FUND_POSITIONS: dict[str, str] = {

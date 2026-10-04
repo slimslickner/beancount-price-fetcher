@@ -87,7 +87,7 @@ this when a new holding is added or occasionally with `--refresh`.
 uv run beanprices fetch-metadata --ledger main.beancount \
     [--commodity SPY] \
     [--all] \
-    [--keys name,asset-class,sector,industry,category] \
+    [--keys yf_name,yf_asset_class,yf_sector,yf_industry,yf_category] \
     [--refresh] \
     [--write] \
     [--output-file commodities.bean] \
@@ -107,7 +107,7 @@ deliberate — the command edits hand-maintained ledger files.
   `--refresh`, a key whose provider value differs is replaced. Values are
   never blanked out or deleted.
 - **`--keys`** limits which keys are added or updated, e.g.
-  `--keys sector,industry --refresh` leaves hand-written `name` alone.
+  `--keys yf_sector,yf_industry --refresh` leaves hand-written `yf_name` alone.
 - **No directive**: a commodity without a `commodity` directive gets one
   appended to `--output-file` (default `commodities.bean` next to the
   ledger), dated to its first held period. Add
@@ -125,17 +125,21 @@ Written in this order when adding:
 
 | Key | Meaning |
 |---|---|
-| `name` | Long name, e.g. `"Vanguard Total Stock Market ETF"` |
-| `asset-class` | `"Equity"`, `"Bond"`, `"Cash"`, `"Crypto"`, etc. |
-| `sector` | Stocks only |
-| `industry` | Stocks only |
-| `category` | Funds only (Morningstar-style, e.g. `"Large Blend"`) |
+| `yf_name` | Long name, e.g. `"Vanguard Total Stock Market ETF"` |
+| `yf_asset_class` | `"Equity"`, `"Bond"`, `"Cash"`, `"Crypto"`, etc. |
+| `yf_sector` | Stocks only |
+| `yf_industry` | Stocks only |
+| `yf_category` | Funds only (Morningstar-style, e.g. `"Large Blend"`) |
 
-Routing is on yfinance's `quoteType`: equities get name/asset-class/
-sector/industry; ETFs and mutual funds get name/category and an
-asset-class inferred from the fund breakdown when one position is at
-least 80% of the total (mixed funds are left for a human); crypto gets
-name/asset-class `Crypto`; anything else gets a name only.
+Keys are namespaced `yf_` to make clear they came from yfinance and to avoid
+colliding with hand-written metadata.
+
+Routing is on yfinance's `quoteType`: equities get `yf_name`,
+`yf_asset_class`, `yf_sector`, `yf_industry`; ETFs and mutual funds get
+`yf_name`, `yf_category`, and `yf_asset_class` inferred from the fund
+breakdown when one position is at least 80% of the total (mixed funds are
+left for a human); crypto gets `yf_name` and `yf_asset_class` `Crypto`;
+anything else gets `yf_name` only.
 
 ### `migrate-dated-prices`
 
@@ -178,10 +182,10 @@ as the ticker and the ledger's operating currency as the quote currency.
 ```beancount
 2000-01-01 commodity AAPL
   price: "USD:yahoo/AAPL"
-  name: "Apple Inc."
-  asset-class: "Equity"
-  sector: "Technology"
-  industry: "Consumer Electronics"
+  yf_name: "Apple Inc."
+  yf_asset_class: "Equity"
+  yf_sector: "Technology"
+  yf_industry: "Consumer Electronics"
 ```
 
 ## "Held" definition

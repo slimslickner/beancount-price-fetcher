@@ -16,10 +16,12 @@ DEFAULT_FREQUENCY: Frequency = Frequency.DAILY
 FUND_ASSET_CLASS_THRESHOLD: float = 0.80
 
 # Order in which metadata keys are added to a commodity directive.
+# Keys are namespaced `yf_` to make it explicit they came from yfinance and to
+# avoid colliding with hand-written metadata.
 METADATA_KEYS: tuple[str, ...] = (
-    "name",
-    "asset-class",
-    "sector",
-    "industry",
-    "category",
+    "yf_name",
+    "yf_asset_class",
+    "yf_sector",
+    "yf_industry",
+    "yf_category",
 )
