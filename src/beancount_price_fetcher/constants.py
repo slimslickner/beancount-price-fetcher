@@ -9,3 +9,17 @@ from .models import Frequency
 DEFAULT_THREAD_COUNT: int = 4
 DEFAULT_RETRY_COUNT: int = 3
 DEFAULT_FREQUENCY: Frequency = Frequency.DAILY
+
+# Metadata lookup: a fund is classified as Equity/Bond/Cash only when its
+# dominant position is at least this fraction of the fund's total assets.
+# Mixed funds are left for a human to classify.
+FUND_ASSET_CLASS_THRESHOLD: float = 0.80
+
+# Order in which metadata keys are added to a commodity directive.
+METADATA_KEYS: tuple[str, ...] = (
+    "name",
+    "asset-class",
+    "sector",
+    "industry",
+    "category",
+)

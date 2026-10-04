@@ -23,6 +23,9 @@ uv run beanprices fetch --ledger path/to/main.beancount --dry-run
 
 # 3. Actually fetch and write
 uv run beanprices fetch --ledger path/to/main.beancount --prices-dir prices
+
+# 4. Backfill descriptive metadata on commodity directives
+uv run beanprices fetch-metadata --ledger path/to/main.beancount --write
 ```
 
 Then add to your main ledger:
@@ -73,6 +76,67 @@ to bypass the filter (logged as a warning). `--end-date` caps the
 yfinance fetch window for reproducible cron runs
 (`--end-date "$(date -v-1d +%F)"`).
 
+### `fetch-metadata`
+
+Look up descriptive metadata (name, asset class, sector, industry,
+category) via yfinance and write it onto the ledger's `commodity`
+directives. Prices change daily; this data is effectively static, so run
+this when a new holding is added or occasionally with `--refresh`.
+
+```bash
+uv run beanprices fetch-metadata --ledger main.beancount \
+    [--commodity SPY] \
+    [--all] \
+    [--keys name,asset-class,sector,industry,category] \
+    [--refresh] \
+    [--write] \
+    [--output-file commodities.bean] \
+    [--threads 4] \
+    [--retries 3]
+```
+
+Unlike `fetch`, the default is a **preview**: it prints a unified diff of
+every planned edit and touches nothing. Pass `--write` to apply. This is
+deliberate — the command edits hand-maintained ledger files.
+
+- **Default scope** is held commodities (any historical or current
+  `HeldPeriod`). `--all` adds every commodity with a `commodity`
+  directive. Operating currencies are always skipped.
+- **Add vs. update**: by default a key is added only when absent; an
+  existing value (including an empty string) is left alone. With
+  `--refresh`, a key whose provider value differs is replaced. Values are
+  never blanked out or deleted.
+- **`--keys`** limits which keys are added or updated, e.g.
+  `--keys sector,industry --refresh` leaves hand-written `name` alone.
+- **No directive**: a commodity without a `commodity` directive gets one
+  appended to `--output-file` (default `commodities.bean` next to the
+  ledger), dated to its first held period. Add
+  `include "commodities.bean"` to your ledger if it isn't already
+  included.
+
+Exit status is non-zero only when a lookup raised after all retries or a
+file could not be edited safely. "Provider returned nothing" is not a
+failure. Status per commodity: `filled`, `updated`, `unchanged`,
+`complete`, `partial`, `not-found`, `error`.
+
+#### Metadata keys
+
+Written in this order when adding:
+
+| Key | Meaning |
+|---|---|
+| `name` | Long name, e.g. `"Vanguard Total Stock Market ETF"` |
+| `asset-class` | `"Equity"`, `"Bond"`, `"Cash"`, `"Crypto"`, etc. |
+| `sector` | Stocks only |
+| `industry` | Stocks only |
+| `category` | Funds only (Morningstar-style, e.g. `"Large Blend"`) |
+
+Routing is on yfinance's `quoteType`: equities get name/asset-class/
+sector/industry; ETFs and mutual funds get name/category and an
+asset-class inferred from the fund breakdown when one position is at
+least 80% of the total (mixed funds are left for a human); crypto gets
+name/asset-class `Crypto`; anything else gets a name only.
+
 ### `migrate-dated-prices`
 
 One-time conversion of bean-price's dated price files
@@ -108,6 +172,17 @@ Per-commodity overrides:
 
 Commodities with no `Commodity` directive at all use the commodity code
 as the ticker and the ledger's operating currency as the quote currency.
+
+`fetch-metadata` adds these descriptive keys to the same directive:
+
+```beancount
+2000-01-01 commodity AAPL
+  price: "USD:yahoo/AAPL"
+  name: "Apple Inc."
+  asset-class: "Equity"
+  sector: "Technology"
+  industry: "Consumer Electronics"
+```
 
 ## "Held" definition
 
@@ -199,17 +274,20 @@ internally (because it's writing fresh per-symbol files from scratch); the
 ```
 src/beancount_price_fetcher/
 ├── __init__.py
-├── constants.py     # DEFAULT_THREAD_COUNT, DEFAULT_FREQUENCY, ...
-├── models.py        # dataclasses + Frequency enum
-├── ledger.py        # analyze_ledger, held-period computation
-├── requirements.py  # compute_requirements (multi-period aware)
-├── writer.py        # append_and_sort, PriceWriter, parse_price_file
-├── migrate.py       # one-time dated-files -> per-symbol migration
-├── fetcher.py       # threaded yfinance fetch with tenacity retry
-└── cli.py           # click CLI entry point
+├── constants.py        # DEFAULT_THREAD_COUNT, DEFAULT_FREQUENCY, ...
+├── models.py           # dataclasses + Frequency/MetadataStatus enums
+├── ledger.py           # analyze_ledger, held-period computation
+├── requirements.py     # compute_requirements (multi-period aware)
+├── writer.py           # append_and_sort, PriceWriter, parse_price_file
+├── migrate.py          # one-time dated-files -> per-symbol migration
+├── fetcher.py          # threaded yfinance fetch with tenacity retry
+├── metadata_fetcher.py # quoteType routing + threaded metadata lookup
+├── metadata_writer.py  # in-place commodity directive text edits
+└── cli.py              # click CLI entry point
 
-tests/                # 100 tests across 8 modules
-tests/fixtures/example.beancount    # shared fixture covering all edge cases
+tests/                # tests across 10 modules + 2 shared fixtures
+tests/fixtures/example.beancount     # price-fetch fixture for all edge cases
+tests/fixtures/metadata.beancount    # metadata-command fixture
 ```
 
 ## License

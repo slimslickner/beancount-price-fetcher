@@ -84,3 +84,55 @@ class FetchedPrice:
     quote_currency: str
     date: date
     price: Decimal
+
+
+class MetadataStatus(Enum):
+    """Outcome of a metadata lookup/edit for one commodity.
+
+    FILLED: one or more keys added.
+    UPDATED: one or more existing values changed under ``--refresh``.
+    UNCHANGED: looked up, nothing to add or change.
+    COMPLETE: nothing missing, no lookup performed.
+    PARTIAL: some selected keys still unavailable from the provider.
+    NOT_FOUND: provider responded but had nothing usable.
+    ERROR: lookup raised after all retries, or a file edit was refused.
+    """
+
+    FILLED = "filled"
+    UPDATED = "updated"
+    UNCHANGED = "unchanged"
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    NOT_FOUND = "not-found"
+    ERROR = "error"
+
+
+@dataclass(slots=True, frozen=True)
+class CommodityInfo:
+    """Descriptive metadata for one commodity as returned by yfinance.
+
+    Every field is optional: providers frequently omit sector/industry for
+    funds or category for equities, and a lookup that yields nothing usable
+    is not an error.
+    """
+
+    name: str | None = None
+    asset_class: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    category: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class MetadataPlan:
+    """Planned metadata edits for one commodity.
+
+    ``adds`` is an ordered ``(key, value)`` tuple sequence; ``updates`` is an
+    ordered ``(key, old_value, new_value)`` tuple sequence. Both are empty
+    when the status is COMPLETE/UNCHANGED/PARTIAL/NOT_FOUND/ERROR.
+    """
+
+    commodity: str
+    status: MetadataStatus
+    adds: tuple[tuple[str, str], ...] = ()
+    updates: tuple[tuple[str, str, str], ...] = ()

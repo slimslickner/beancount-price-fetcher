@@ -24,6 +24,26 @@ from .models import CommodityMetadata, Frequency, HeldPeriod
 
 logger = logging.getLogger(__name__)
 
+# Beancount injects these into every directive's ``meta``; they are not
+# user-authored metadata and must never be treated as editable keys.
+_INTERNAL_META_KEYS = frozenset({"filename", "lineno"})
+
+
+@dataclass(slots=True, frozen=True)
+class CommodityDirective:
+    """Source location and user metadata for one ``Commodity`` directive.
+
+    ``filename``/``lineno`` point at the directive's original source (which
+    may be an included file). ``metadata`` holds the user-authored keys
+    (everything except beancount's internal ``filename``/``lineno``), with
+    values coerced to strings for display/comparison.
+    """
+
+    commodity: str
+    filename: str
+    lineno: int
+    metadata: dict[str, str] = field(default_factory=dict)
+
 
 @dataclass(slots=True, frozen=True)
 class LedgerAnalysis:
@@ -36,6 +56,7 @@ class LedgerAnalysis:
     today: date = field(default_factory=date.today)
     display_precision: dict[str, Decimal] = field(default_factory=dict)
     skipped_commodities: frozenset[str] = field(default_factory=frozenset)
+    commodity_directives: dict[str, CommodityDirective] = field(default_factory=dict)
 
 
 def analyze_ledger(path: str | Path, today: date | None = None) -> LedgerAnalysis:
@@ -75,7 +96,37 @@ def analyze_ledger(path: str | Path, today: date | None = None) -> LedgerAnalysi
         today=ref_today,
         display_precision=dict(options.get("display_precision", {})),
         skipped_commodities=_collect_skipped_commodities(entries, metadata),
+        commodity_directives=extract_commodity_directives(entries),
     )
+
+
+def extract_commodity_directives(entries: list[Any]) -> dict[str, CommodityDirective]:
+    """Map commodity code to its ``Commodity`` directive's location and metadata.
+
+    Used by the metadata command to edit directives in place. Directives
+    without a usable ``filename``/``lineno`` (e.g. synthesised entries) are
+    skipped.
+    """
+    out: dict[str, CommodityDirective] = {}
+    for entry in entries:
+        if not isinstance(entry, data.Commodity):
+            continue
+        meta = entry.meta or {}
+        filename = meta.get("filename")
+        lineno = meta.get("lineno")
+        if not isinstance(filename, str) or not isinstance(lineno, int):
+            logger.debug("commodity %s has no source location; skipping", entry.currency)
+            continue
+        user_metadata = {
+            str(key): str(value) for key, value in meta.items() if key not in _INTERNAL_META_KEYS
+        }
+        out[entry.currency] = CommodityDirective(
+            commodity=entry.currency,
+            filename=filename,
+            lineno=lineno,
+            metadata=user_metadata,
+        )
+    return out
 
 
 def extract_commodity_metadata(entries: list[Any]) -> dict[str, CommodityMetadata]:

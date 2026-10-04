@@ -1,0 +1,51 @@
+;; tests/fixtures/metadata.beancount
+;;
+;; Fixture for the `fetch-metadata` command. Deliberately includes:
+;;   - a directive with partial metadata (SPY: only name)
+;;   - a directive with an empty value that must never be blanked/overwritten
+;;     without --refresh (AAPL: sector "")
+;;   - a directive with no descriptive metadata (FXAIX)
+;;   - a held commodity with no `commodity` directive at all (MSFT)
+;;   - a declared-but-not-held commodity (CASHONLY) for --all coverage
+
+option "title" "metadata example"
+option "operating_currency" "USD"
+
+2020-01-01 commodity SPY
+  price: "USD:yahoo/SPY"
+  name: "SPDR S&P 500 ETF Trust"
+
+2021-01-01 commodity AAPL
+  price: "USD:yahoo/AAPL"
+  name: "Apple Inc."
+  asset-class: "Equity"
+  sector: ""
+
+2022-01-01 commodity FXAIX
+  price: "USD:yahoo/FXAIX"
+
+2020-01-01 commodity CASHONLY
+
+2018-01-01 open Assets:Investments USD
+2018-01-01 open Assets:Bank USD
+2018-01-01 open Assets:Investments:SPY
+2018-01-01 open Assets:Investments:AAPL
+2018-01-01 open Assets:Investments:FXAIX
+2018-01-01 open Assets:Investments:MSFT
+2018-01-01 open Income:Bank
+
+2020-01-02 *
+  Assets:Investments:SPY  10 SPY {300 USD}
+  Assets:Bank
+
+2021-01-15 *
+  Assets:Investments:AAPL  5 AAPL {130 USD}
+  Assets:Bank
+
+2022-01-03 *
+  Assets:Investments:FXAIX  10 FXAIX {130 USD}
+  Assets:Bank
+
+2021-06-01 *
+  Assets:Investments:MSFT  5 MSFT {260 USD}
+  Assets:Bank

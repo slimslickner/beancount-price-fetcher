@@ -6,6 +6,9 @@ Per the plan, the CLI is a thin layer; we exercise it via click's
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any, ClassVar
+
 import pandas as pd
 import pytest
 from click.testing import CliRunner
@@ -286,3 +289,201 @@ def test_cli_list_missing_unchanged_after_fix(runner: CliRunner) -> None:
         result = runner.invoke(cli, ["list-missing", "--ledger", FIXTURE])
     assert result.exit_code == 0
     assert "SPY" in result.output
+
+
+# ---- fetch-metadata ----
+
+METADATA_FIXTURE = "tests/fixtures/metadata.beancount"
+
+
+class _CliTicker:
+    """Fake yfinance.Ticker keyed by symbol for fetch-metadata CLI tests."""
+
+    infos: ClassVar[dict[str, Any]] = {}
+    funds: ClassVar[dict[str, Any]] = {}
+
+    def __init__(self, symbol: str) -> None:
+        self.symbol = symbol
+
+    @property
+    def info(self) -> Any:
+        payload = self.infos.get(self.symbol)
+        if isinstance(payload, Exception):
+            raise payload
+        return payload
+
+    @property
+    def funds_data(self) -> Any:
+        return self.funds.get(self.symbol)
+
+
+def _install_metadata_ticker(mocker) -> _CliTicker:
+    _CliTicker.infos = {
+        "SPY": {
+            "quoteType": "ETF",
+            "longName": "SPDR S&P 500 ETF Trust",
+            "category": "Large Blend",
+        },
+        "AAPL": {
+            "quoteType": "EQUITY",
+            "longName": "Apple Inc.",
+            "sector": "Technology",
+            "industry": "Consumer Electronics",
+        },
+        "FXAIX": {
+            "quoteType": "MUTUALFUND",
+            "longName": "Fidelity 500 Index Fund",
+            "category": "Large Blend",
+        },
+        "MSFT": {
+            "quoteType": "EQUITY",
+            "longName": "Microsoft Corporation",
+            "sector": "Technology",
+            "industry": "Software",
+        },
+        "CASHONLY": {"quoteType": "MONEYMARKET", "longName": "Cash Only"},
+    }
+    _CliTicker.funds = {"SPY": {"stockPosition": 0.98, "bondPosition": 0.01, "cashPosition": 0.01}}
+    mocker.patch("yfinance.Ticker", _CliTicker)
+    return _CliTicker
+
+
+def _copy_metadata_ledger(tmp_path) -> Path:
+    import shutil
+
+    destination = tmp_path / "metadata.beancount"
+    shutil.copy(METADATA_FIXTURE, destination)
+    return destination
+
+
+def _hash(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_cli_fetch_metadata_preview_does_not_write(runner: CliRunner, mocker, tmp_path) -> None:
+    _install_metadata_ticker(mocker)
+    ledger = _copy_metadata_ledger(tmp_path)
+    before = _hash(ledger)
+    result = runner.invoke(cli, ["fetch-metadata", "--ledger", str(ledger)])
+    assert result.exit_code == 0
+    assert _hash(ledger) == before
+    assert "Preview only" in result.output
+    assert "SPY" in result.output
+    assert "MSFT" in result.output
+    # Diff is shown for planned edits.
+    assert "---" in result.output
+
+
+def test_cli_fetch_metadata_write_adds_metadata(runner: CliRunner, mocker, tmp_path) -> None:
+    _install_metadata_ticker(mocker)
+    ledger = _copy_metadata_ledger(tmp_path)
+    result = runner.invoke(cli, ["fetch-metadata", "--ledger", str(ledger), "--write"])
+    assert result.exit_code == 0
+    text = ledger.read_text()
+    assert 'name: "Apple Inc."' in text
+    assert "industry" in text
+    # New directive for the held, undeclared MSFT goes to commodities.bean.
+    output = tmp_path / "commodities.bean"
+    assert output.exists()
+    assert "commodity MSFT" in output.read_text()
+    assert "include" in result.output
+
+
+def test_cli_fetch_metadata_keys_restricts_adds(runner: CliRunner, mocker, tmp_path) -> None:
+    _install_metadata_ticker(mocker)
+    ledger = _copy_metadata_ledger(tmp_path)
+    result = runner.invoke(
+        cli,
+        ["fetch-metadata", "--ledger", str(ledger), "--write", "--keys", "name"],
+    )
+    assert result.exit_code == 0
+    text = ledger.read_text()
+    # AAPL's empty hand-written sector stays empty; only name is considered.
+    assert 'sector: ""' in text
+    assert 'sector: "Technology"' not in text
+
+
+def test_cli_fetch_metadata_refresh_updates_value(runner: CliRunner, mocker, tmp_path) -> None:
+    _install_metadata_ticker(mocker)
+    ledger = _copy_metadata_ledger(tmp_path)
+    result = runner.invoke(
+        cli,
+        ["fetch-metadata", "--ledger", str(ledger), "--write", "--refresh", "--keys", "sector"],
+    )
+    assert result.exit_code == 0
+    assert 'sector: "Technology"' in ledger.read_text()
+
+
+def test_cli_fetch_metadata_without_refresh_leaves_existing(
+    runner: CliRunner, mocker, tmp_path
+) -> None:
+    _install_metadata_ticker(mocker)
+    ledger = _copy_metadata_ledger(tmp_path)
+    runner.invoke(cli, ["fetch-metadata", "--ledger", str(ledger), "--write", "--keys", "sector"])
+    # Without --refresh the empty existing sector is untouched, and the absent
+    # name/asset-class are not selected.
+    assert 'sector: ""' in ledger.read_text()
+
+
+def test_cli_fetch_metadata_exits_nonzero_on_lookup_failure(
+    runner: CliRunner, mocker, tmp_path
+) -> None:
+    _CliTicker.infos = {"SPY": RuntimeError("network down")}
+    _CliTicker.funds = {}
+    mocker.patch("yfinance.Ticker", _CliTicker)
+    ledger = _copy_metadata_ledger(tmp_path)
+    result = runner.invoke(cli, ["fetch-metadata", "--ledger", str(ledger), "--retries", "1"])
+    assert result.exit_code != 0
+    assert "network down" in result.output
+
+
+def test_cli_fetch_metadata_all_includes_declared_only(runner: CliRunner, mocker, tmp_path) -> None:
+    _install_metadata_ticker(mocker)
+    ledger = _copy_metadata_ledger(tmp_path)
+    result = runner.invoke(
+        cli, ["fetch-metadata", "--ledger", str(ledger), "--all", "--retries", "1"]
+    )
+    assert result.exit_code == 0
+    assert "CASHONLY" in result.output
+
+
+def test_cli_fetch_metadata_unknown_key_rejected(runner: CliRunner, tmp_path) -> None:
+    ledger = _copy_metadata_ledger(tmp_path)
+    result = runner.invoke(cli, ["fetch-metadata", "--ledger", str(ledger), "--keys", "bogus"])
+    assert result.exit_code != 0
+    assert "bogus" in result.output
+
+
+def test_cli_help_lists_fetch_metadata(runner: CliRunner) -> None:
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    assert "fetch-metadata" in result.output
+
+
+def test_cli_fetch_metadata_edits_included_file(runner: CliRunner, mocker, tmp_path) -> None:
+    _install_metadata_ticker(mocker)
+    main = tmp_path / "main.beancount"
+    holdings = tmp_path / "holdings.beancount"
+    main.write_text('option "operating_currency" "USD"\ninclude "holdings.beancount"\n')
+    holdings.write_text(
+        '2020-01-01 commodity SPY\n  price: "USD:yahoo/SPY"\n'
+        "2020-01-01 open Assets:Investments:SPY\n"
+        "2020-01-01 open Assets:Bank\n"
+        "2020-01-02 *\n"
+        "  Assets:Investments:SPY 10 SPY {300 USD}\n"
+        "  Assets:Bank\n"
+    )
+    main_before = main.read_text()
+    result = runner.invoke(
+        cli, ["fetch-metadata", "--ledger", str(main), "--write", "--keys", "name"]
+    )
+    assert result.exit_code == 0
+    assert main.read_text() == main_before
+    assert 'name: "SPDR S&P 500 ETF Trust"' in holdings.read_text()
+    # The edited ledger still loads cleanly.
+    from beancount.loader import load_file
+
+    _, errors, _ = load_file(str(main))
+    assert errors == []
