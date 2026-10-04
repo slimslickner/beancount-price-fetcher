@@ -36,7 +36,7 @@ from .metadata_writer import (
     apply_directive_edits,
 )
 from .migrate import migrate_dated_prices
-from .models import FetchedPrice, Frequency, MetadataPlan, MetadataStatus
+from .models import CommodityInfo, FetchedPrice, Frequency, MetadataPlan, MetadataStatus
 from .requirements import compute_requirements
 from .writer import DEFAULT_FILE_EXTENSION, PriceWriter
 
@@ -326,7 +326,7 @@ def fetch_metadata(
         requests.append(MetadataLookupRequest(code, _resolve_ticker(code, analysis)))
         pending[code] = (directive, existing)
 
-    outcomes = MetadataFetcher(threads=threads, retries=retries).fetch_all(requests)
+    outcomes = _lookup_metadata(requests, threads, retries)
 
     edits_by_file: dict[Path, list[DirectiveEdit]] = defaultdict(list)
     new_directives: list[NewMetadataDirective] = []
@@ -388,6 +388,22 @@ def fetch_metadata(
         click.echo("Preview only; rerun with --write to apply.")
     if errors:
         sys.exit(1)
+
+
+def _lookup_metadata(
+    requests: list[MetadataLookupRequest], threads: int, retries: int
+) -> dict[str, CommodityInfo | Exception]:
+    """Run metadata lookups, showing a live progress bar on an interactive stderr."""
+    fetcher = MetadataFetcher(threads=threads, retries=retries)
+    if not requests:
+        return {}
+    if not sys.stderr.isatty():
+        click.echo(f"Looking up metadata for {len(requests)} commodit(ies)...", err=True)
+        return fetcher.fetch_all(requests)
+    with click.progressbar(
+        length=len(requests), label="Looking up metadata", file=sys.stderr
+    ) as bar:
+        return fetcher.fetch_all(requests, on_result=lambda _code: bar.update(1))
 
 
 def _parse_metadata_keys(keys: str | None) -> list[str]:

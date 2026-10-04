@@ -21,7 +21,7 @@ real failure and is retried with exponential backoff.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
@@ -229,9 +229,19 @@ class MetadataFetcher:
     retries: int = DEFAULT_RETRY_COUNT
 
     def fetch_all(
-        self, requests: Sequence[MetadataLookupRequest]
+        self,
+        requests: Sequence[MetadataLookupRequest],
+        *,
+        on_result: Callable[[str], None] | None = None,
     ) -> dict[str, CommodityInfo | Exception]:
-        """Look up every request in parallel; return per-commodity outcomes."""
+        """Look up every request in parallel; return per-commodity outcomes.
+
+        Args:
+            requests: Commodities/symbols to look up.
+            on_result: Optional callback invoked, in the caller's thread, with
+                each commodity code as its lookup finishes. Used for progress
+                reporting; failures are reported too.
+        """
         results: dict[str, CommodityInfo | Exception] = {}
         if not requests:
             return results
@@ -247,6 +257,8 @@ class MetadataFetcher:
                 except Exception as exc:
                     logger.warning("metadata lookup failed for %s: %s", req.symbol, exc)
                     results[req.commodity] = exc
+                if on_result is not None:
+                    on_result(req.commodity)
         return results
 
 
