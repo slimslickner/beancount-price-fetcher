@@ -2,15 +2,19 @@
 
 Per the plan, no real network calls in CI. We mock ``yf.Ticker`` and
 exercise single-threaded + threaded paths against controlled responses.
+The final ``test_live_history_smoke`` is opt-in and only runs when
+``BEANPRICES_LIVE`` is set.
 """
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from beancount_price_fetcher.fetcher import (
     PriceFetcher,
@@ -653,3 +657,31 @@ def test_fetch_all_threads_end_date_into_each_call(mocker: Any) -> None:
     for call in mock_history.call_args_list:
         _, kwargs = call
         assert kwargs.get("end") == "2024-06-02"
+
+
+# ---- opt-in live smoke test ----
+#
+# Skipped unless BEANPRICES_LIVE is set, so the default suite stays offline
+# and deterministic. Run manually with: BEANPRICES_LIVE=1 uv run pytest ...
+
+
+@pytest.mark.skipif(
+    not os.environ.get("BEANPRICES_LIVE"),
+    reason="live network test; set BEANPRICES_LIVE=1 to run",
+)
+def test_live_history_smoke() -> None:
+    """Hit Yahoo once for a stable ETF over a known historical range."""
+    missing = frozenset({date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 5)})
+    req = PriceRequirement(
+        commodity="SPY",
+        ticker="SPY",
+        quote_currency="USD",
+        frequency=Frequency.DAILY,
+        min_date=date(2024, 1, 2),
+        max_date=date(2024, 1, 5),
+        missing_dates=missing,
+    )
+    prices, exc = fetch_one(req, retries=3)
+    assert exc is None
+    assert {p.date for p in prices} == missing
+    assert all(p.price > 0 for p in prices)
