@@ -23,6 +23,9 @@ uv run beanprices fetch --ledger path/to/main.beancount --dry-run
 
 # 3. Actually fetch and write
 uv run beanprices fetch --ledger path/to/main.beancount --prices-dir prices
+
+# 4. Backfill descriptive metadata on commodity directives
+uv run beanprices fetch-metadata --ledger path/to/main.beancount --write
 ```
 
 Then add to your main ledger:
@@ -73,6 +76,83 @@ to bypass the filter (logged as a warning). `--end-date` caps the
 yfinance fetch window for reproducible cron runs
 (`--end-date "$(date -v-1d +%F)"`).
 
+### `fetch-metadata`
+
+Look up descriptive metadata (name, asset class, sector, industry,
+category) via yfinance and write it onto the ledger's `commodity`
+directives. Prices change daily; this data is effectively static, so run
+this when a new holding is added or occasionally with `--refresh`.
+
+```bash
+uv run beanprices fetch-metadata --ledger main.beancount \
+    [--commodity SPY] \
+    [--all] \
+    [--keys yf_name,yf_quote_type,yf_isin,yf_exchange,yf_currency,yf_asset_class,yf_sector,yf_industry,yf_category,yf_fund_family,yf_expense_ratio,yf_morningstar_rating,yf_market_cap_category] \
+    [--refresh] \
+    [--write] \
+    [--output-file commodities.bean] \
+    [--threads 4] \
+    [--retries 3]
+```
+
+Unlike `fetch`, the default is a **preview**: it prints a unified diff of
+every planned edit and touches nothing. Pass `--write` to apply. This is
+deliberate — the command edits hand-maintained ledger files.
+
+- **Default scope** is held commodities (any historical or current
+  `HeldPeriod`). `--all` adds every commodity with a `commodity`
+  directive. Operating currencies are always skipped.
+- **Add vs. update**: by default a key is added only when absent; an
+  existing value (including an empty string) is left alone. With
+  `--refresh`, a key whose provider value differs is replaced. Values are
+  never blanked out or deleted.
+- **`--keys`** limits which keys are added or updated, e.g.
+  `--keys yf_sector,yf_industry --refresh` leaves hand-written `yf_name` alone.
+- **No directive**: a commodity without a `commodity` directive gets one
+  appended to `--output-file` (default `commodities.bean` next to the
+  ledger), dated to its first held period. Add
+  `include "commodities.bean"` to your ledger if it isn't already
+  included.
+
+Exit status is non-zero only when a lookup raised after all retries or a
+file could not be edited safely. "Provider returned nothing" is not a
+failure. Status per commodity: `filled`, `updated`, `unchanged`,
+`complete`, `partial`, `not-found`, `error`.
+
+#### Metadata keys
+
+Written in this order when adding:
+
+| Key | Meaning |
+|---|---|
+| `yf_name` | Long name, e.g. `"Vanguard Total Stock Market ETF"` |
+| `yf_quote_type` | `"EQUITY"`, `"ETF"`, `"MUTUALFUND"`, `"CRYPTOCURRENCY"`, … |
+| `yf_isin` | ISIN, e.g. `"US0378331005"` (separate lookup) |
+| `yf_exchange` | Exchange name, e.g. `"NasdaqGS"` |
+| `yf_currency` | Instrument currency, e.g. `"USD"` |
+| `yf_asset_class` | `"Equity"`, `"Bond"`, `"Cash"`, `"Crypto"`, etc. |
+| `yf_sector` | Stocks only |
+| `yf_industry` | Stocks only |
+| `yf_category` | Funds only (Morningstar-style, e.g. `"Large Blend"`) |
+| `yf_fund_family` | Funds only, e.g. `"Vanguard"` |
+| `yf_expense_ratio` | Funds only, decimal fraction (0.05% is `0.0005`) |
+| `yf_morningstar_rating` | Funds only (ETF/mutual fund), integer 1–5 |
+| `yf_market_cap_category` | Stocks only: Mega/Large/Mid/Small/Micro/Nano Cap |
+
+Keys are namespaced `yf_` to make clear they came from yfinance and to avoid
+colliding with hand-written metadata. `yf_expense_ratio` and
+`yf_morningstar_rating` are written as bare numbers; all other values are
+written as quoted strings.
+
+Routing is on yfinance's `quoteType`. `yf_name`, `yf_quote_type`, `yf_isin`,
+`yf_exchange`, `yf_currency`, and `yf_asset_class` are set for every security
+type where available. Equities additionally get `yf_sector`, `yf_industry`,
+and `yf_market_cap_category`. ETFs/mutual funds additionally get `yf_category`,
+`yf_fund_family`, `yf_expense_ratio`, and `yf_morningstar_rating`, with
+`yf_asset_class` inferred from the fund breakdown when one
+position is at least 80% of the total (mixed funds are left for a human).
+Crypto gets `yf_asset_class` `Crypto`.
+
 ### `migrate-dated-prices`
 
 One-time conversion of bean-price's dated price files
@@ -108,6 +188,17 @@ Per-commodity overrides:
 
 Commodities with no `Commodity` directive at all use the commodity code
 as the ticker and the ledger's operating currency as the quote currency.
+
+`fetch-metadata` adds these descriptive keys to the same directive:
+
+```beancount
+2000-01-01 commodity AAPL
+  price: "USD:yahoo/AAPL"
+  yf_name: "Apple Inc."
+  yf_asset_class: "Equity"
+  yf_sector: "Technology"
+  yf_industry: "Consumer Electronics"
+```
 
 ## "Held" definition
 
@@ -199,17 +290,20 @@ internally (because it's writing fresh per-symbol files from scratch); the
 ```
 src/beancount_price_fetcher/
 ├── __init__.py
-├── constants.py     # DEFAULT_THREAD_COUNT, DEFAULT_FREQUENCY, ...
-├── models.py        # dataclasses + Frequency enum
-├── ledger.py        # analyze_ledger, held-period computation
-├── requirements.py  # compute_requirements (multi-period aware)
-├── writer.py        # append_and_sort, PriceWriter, parse_price_file
-├── migrate.py       # one-time dated-files -> per-symbol migration
-├── fetcher.py       # threaded yfinance fetch with tenacity retry
-└── cli.py           # click CLI entry point
+├── constants.py        # DEFAULT_THREAD_COUNT, DEFAULT_FREQUENCY, ...
+├── models.py           # dataclasses + Frequency/MetadataStatus enums
+├── ledger.py           # analyze_ledger, held-period computation
+├── requirements.py     # compute_requirements (multi-period aware)
+├── writer.py           # append_and_sort, PriceWriter, parse_price_file
+├── migrate.py          # one-time dated-files -> per-symbol migration
+├── fetcher.py          # threaded yfinance fetch with tenacity retry
+├── metadata_fetcher.py # quoteType routing + threaded metadata lookup
+├── metadata_writer.py  # in-place commodity directive text edits
+└── cli.py              # click CLI entry point
 
-tests/                # 100 tests across 8 modules
-tests/fixtures/example.beancount    # shared fixture covering all edge cases
+tests/                # tests across 10 modules + 2 shared fixtures
+tests/fixtures/example.beancount     # price-fetch fixture for all edge cases
+tests/fixtures/metadata.beancount    # metadata-command fixture
 ```
 
 ## License

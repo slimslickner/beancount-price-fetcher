@@ -84,3 +84,86 @@ class FetchedPrice:
     quote_currency: str
     date: date
     price: Decimal
+
+
+class MetadataStatus(Enum):
+    """Outcome of a metadata lookup/edit for one commodity.
+
+    FILLED: one or more keys added.
+    UPDATED: one or more existing values changed under ``--refresh``.
+    UNCHANGED: looked up, nothing to add or change.
+    COMPLETE: nothing missing, no lookup performed.
+    PARTIAL: some selected keys still unavailable from the provider.
+    NOT_FOUND: provider responded but had nothing usable.
+    ERROR: lookup raised after all retries, or a file edit was refused.
+    """
+
+    FILLED = "filled"
+    UPDATED = "updated"
+    UNCHANGED = "unchanged"
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    NOT_FOUND = "not-found"
+    ERROR = "error"
+
+
+#: A metadata value as stored on a directive. Strings are written quoted;
+#: ``int``/``Decimal`` are written as bare Beancount numbers.
+MetadataValue = str | int | Decimal
+
+
+def metadata_value_text(value: MetadataValue) -> str:
+    """Render a metadata value as bare source text (no quoting).
+
+    Used both to write numbers unquoted and to compare a provider value
+    against the string form already stored on a directive.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    return str(value)
+
+
+@dataclass(slots=True, frozen=True)
+class CommodityInfo:
+    """Descriptive metadata for one commodity as returned by yfinance.
+
+    Every field is optional: providers frequently omit sector/industry for
+    funds or category for equities, and a lookup that yields nothing usable
+    is not an error. ``quote_type``/``isin``/``exchange``/``currency`` are
+    populated for all security types; the fund-only fields are set only for
+    ETFs/mutual funds.
+
+    ``expense_ratio`` is a decimal fraction (0.05% -> ``Decimal("0.0005")``),
+    not a percentage; ``morningstar_rating`` is an integer 1-5.
+    """
+
+    name: str | None = None
+    asset_class: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    category: str | None = None
+    quote_type: str | None = None
+    isin: str | None = None
+    exchange: str | None = None
+    currency: str | None = None
+    fund_family: str | None = None
+    expense_ratio: Decimal | None = None
+    morningstar_rating: int | None = None
+    market_cap_category: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class MetadataPlan:
+    """Planned metadata edits for one commodity.
+
+    ``adds`` is an ordered ``(key, value)`` tuple sequence; ``updates`` is an
+    ordered ``(key, old_value, new_value)`` tuple sequence. Both are empty
+    when the status is COMPLETE/UNCHANGED/PARTIAL/NOT_FOUND/ERROR.
+    """
+
+    commodity: str
+    status: MetadataStatus
+    adds: tuple[tuple[str, MetadataValue], ...] = ()
+    updates: tuple[tuple[str, object, MetadataValue], ...] = ()
