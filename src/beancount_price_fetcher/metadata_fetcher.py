@@ -7,16 +7,20 @@ command is run ad hoc rather than on a schedule.
 Routing is driven by ``info["quoteType"]``:
 
 * ``EQUITY`` -> ``yf_name``, ``yf_asset_class`` = Equity, ``yf_sector``,
-  ``yf_industry``
-* ``ETF``/``MUTUALFUND`` -> ``yf_name``, ``yf_category``, and ``yf_asset_class``
+  ``yf_industry``, ``yf_market_cap_category``
+* ``ETF``/``MUTUALFUND`` -> ``yf_name``, ``yf_category``, ``yf_fund_family``,
+  ``yf_expense_ratio``, ``yf_morningstar_rating``, and ``yf_asset_class``
   inferred from the fund breakdown when one position dominates (>= 80%).
   Sector/industry are never set for funds.
 * ``CRYPTOCURRENCY`` -> ``yf_name``, ``yf_asset_class`` = Crypto
 * anything else -> ``yf_name`` only
 
-``funds_data`` is unreliable; any exception while reading it means "no fund
-breakdown", not a lookup failure. A network error on ``Ticker.info`` is a
-real failure and is retried with exponential backoff.
+``yf_quote_type``/``yf_isin``/``yf_exchange``/``yf_currency`` are set for all
+security types.
+
+``funds_data`` and ``Ticker.isin`` are unreliable; any exception while reading
+them means "not available", not a lookup failure. A network error on
+``Ticker.info`` is a real failure and is retried with exponential backoff.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import yfinance
@@ -36,16 +41,24 @@ from tenacity import (
 )
 
 from .constants import DEFAULT_RETRY_COUNT, DEFAULT_THREAD_COUNT, FUND_ASSET_CLASS_THRESHOLD
-from .models import CommodityInfo, MetadataPlan, MetadataStatus
+from .models import CommodityInfo, MetadataPlan, MetadataStatus, MetadataValue
 
 logger = logging.getLogger(__name__)
 
 _KEY_TO_ATTR: dict[str, str] = {
     "yf_name": "name",
+    "yf_quote_type": "quote_type",
+    "yf_isin": "isin",
+    "yf_exchange": "exchange",
+    "yf_currency": "currency",
     "yf_asset_class": "asset_class",
     "yf_sector": "sector",
     "yf_industry": "industry",
     "yf_category": "category",
+    "yf_fund_family": "fund_family",
+    "yf_expense_ratio": "expense_ratio",
+    "yf_morningstar_rating": "morningstar_rating",
+    "yf_market_cap_category": "market_cap_category",
 }
 
 _FUND_POSITIONS: dict[str, str] = {
@@ -54,22 +67,39 @@ _FUND_POSITIONS: dict[str, str] = {
     "cashPosition": "Cash",
 }
 
+_MARKET_CAP_BUCKETS: tuple[tuple[float, str], ...] = (
+    (200_000_000_000, "Mega Cap"),
+    (10_000_000_000, "Large Cap"),
+    (2_000_000_000, "Mid Cap"),
+    (300_000_000, "Small Cap"),
+    (50_000_000, "Micro Cap"),
+)
+
 
 @dataclass(slots=True, frozen=True)
 class MetadataLookupRequest:
-    """One commodity to look up, with the yfinance symbol to query."""
+    """One commodity to look up, with the yfinance symbol to query.
+
+    ``fetch_isin`` gates the extra third-party ISIN request so it is only made
+    when ``yf_isin`` is actually among the selected keys.
+    """
 
     commodity: str
     symbol: str
+    fetch_isin: bool = True
 
 
-def get_info_value(info: CommodityInfo, key: str) -> str | None:
+def get_info_value(info: CommodityInfo, key: str) -> MetadataValue | None:
     """Return the ``CommodityInfo`` field backing a metadata ``key``, or None."""
     attr = _KEY_TO_ATTR.get(key)
     if attr is None:
         return None
     value = getattr(info, attr)
-    return value if isinstance(value, str) and value else None
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, (int, Decimal)):
+        return value
+    return None
 
 
 def _clean_str(value: object) -> str | None:
@@ -144,21 +174,100 @@ def _extract_asset_classes(funds_data: object) -> object | None:
         return None
 
 
-def info_to_commodity_info(info: object, funds_data: object | None = None) -> CommodityInfo:
+def _extract_fund_mapping(funds_data: object, attr: str) -> Mapping[str, object] | None:
+    """Read a mapping attribute off ``funds_data`` defensively."""
+    if funds_data is None:
+        return None
+    try:
+        value: object = getattr(funds_data, attr)
+    except Exception as exc:
+        logger.debug("funds_data.%s unavailable: %s", attr, exc)
+        return None
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _fund_family(info: Mapping[str, object], funds_data: object | None) -> str | None:
+    """Fund family from ``info``, falling back to ``funds_data.fund_overview``."""
+    family = _clean_str(info.get("fundFamily"))
+    if family:
+        return family
+    overview = _extract_fund_mapping(funds_data, "fund_overview")
+    if overview is not None:
+        return _clean_str(overview.get("family"))
+    return None
+
+
+def _to_int(value: object) -> int | None:
+    """Coerce an integral provider value (e.g. a Morningstar rating) to int."""
+    number = _to_float(value)
+    if number is None:
+        return None
+    return round(number)
+
+
+def _expense_ratio(info: Mapping[str, object]) -> Decimal | None:
+    """Fund expense ratio as a decimal fraction (0.05% -> ``0.0005``), or None.
+
+    yfinance's ``netExpenseRatio`` is already a percentage (SPY 0.0945),
+    while ``annualReportExpenseRatio`` is a fraction (VTSAX 0.0004). Both are
+    normalised here to a fraction so the stored value is unambiguous.
+    """
+    net = _to_float(info.get("netExpenseRatio"))
+    annual = _to_float(info.get("annualReportExpenseRatio"))
+    if net is not None:
+        fraction = Decimal(str(net)) / Decimal(100)
+    elif annual is not None:
+        fraction = Decimal(str(annual))
+    else:
+        return None
+    if fraction < 0:
+        return None
+    return fraction.normalize()
+
+
+def _market_cap_category(value: object) -> str | None:
+    """Bucket a market capitalisation into a conventional size category."""
+    number = _to_float(value)
+    if number is None or number <= 0:
+        return None
+    for threshold, label in _MARKET_CAP_BUCKETS:
+        if number >= threshold:
+            return label
+    return "Nano Cap"
+
+
+def _clean_isin(value: object) -> str | None:
+    """Normalise an ISIN; yfinance uses ``-`` as a "not applicable" sentinel."""
+    text = _clean_str(value)
+    if text is None or text == "-":
+        return None
+    return text
+
+
+def info_to_commodity_info(
+    info: object, funds_data: object | None = None, *, isin: object | None = None
+) -> CommodityInfo:
     """Route a yfinance ``info`` mapping (and optional fund data) to fields.
 
     Args:
         info: The ``Ticker.info`` mapping. Non-mappings yield an empty result.
         funds_data: The ``Ticker.funds_data`` object (or a mapping that is
             already the asset-class breakdown) for fund classification.
+        isin: The ``Ticker.isin`` value, fetched separately and passed through.
 
     Returns:
         A ``CommodityInfo`` with only the fields the provider could supply.
     """
     if not isinstance(info, Mapping):
         return CommodityInfo()
-    quote_type = (_clean_str(info.get("quoteType")) or "").upper()
+    quote_type_raw = _clean_str(info.get("quoteType"))
+    quote_type = (quote_type_raw or "").upper()
     name = _clean_str(info.get("longName")) or _clean_str(info.get("shortName"))
+    exchange = _clean_str(info.get("fullExchangeName")) or _clean_str(info.get("exchange"))
+    currency = _clean_str(info.get("currency"))
+    isin_value = _clean_isin(isin)
 
     if quote_type == "EQUITY":
         return CommodityInfo(
@@ -166,16 +275,41 @@ def info_to_commodity_info(info: object, funds_data: object | None = None) -> Co
             asset_class="Equity",
             sector=_clean_str(info.get("sector")),
             industry=_clean_str(info.get("industry")),
+            market_cap_category=_market_cap_category(info.get("marketCap")),
+            quote_type=quote_type_raw,
+            exchange=exchange,
+            currency=currency,
+            isin=isin_value,
         )
     if quote_type in ("ETF", "MUTUALFUND"):
         return CommodityInfo(
             name=name,
             asset_class=_fund_asset_class(_extract_asset_classes(funds_data)),
             category=_clean_str(info.get("category")),
+            fund_family=_fund_family(info, funds_data),
+            expense_ratio=_expense_ratio(info),
+            morningstar_rating=_to_int(info.get("morningStarOverallRating")),
+            quote_type=quote_type_raw,
+            exchange=exchange,
+            currency=currency,
+            isin=isin_value,
         )
     if quote_type == "CRYPTOCURRENCY":
-        return CommodityInfo(name=name, asset_class="Crypto")
-    return CommodityInfo(name=name)
+        return CommodityInfo(
+            name=name,
+            asset_class="Crypto",
+            quote_type=quote_type_raw,
+            exchange=exchange,
+            currency=currency,
+            isin=isin_value,
+        )
+    return CommodityInfo(
+        name=name,
+        quote_type=quote_type_raw,
+        exchange=exchange,
+        currency=currency,
+        isin=isin_value,
+    )
 
 
 def _fetch_info_with_retry(ticker: Any, retries: int) -> object:
@@ -193,12 +327,17 @@ def _fetch_info_with_retry(ticker: Any, retries: int) -> object:
     return _do()
 
 
-def lookup_commodity_info(symbol: str, retries: int = DEFAULT_RETRY_COUNT) -> CommodityInfo:
+def lookup_commodity_info(
+    symbol: str, retries: int = DEFAULT_RETRY_COUNT, *, fetch_isin: bool = True
+) -> CommodityInfo:
     """Look up descriptive metadata for one yfinance ``symbol``.
 
     Args:
         symbol: The yfinance ticker.
         retries: Per-call retry attempts for the ``info`` request.
+        fetch_isin: When True, make the extra (third-party, experimental)
+            ``Ticker.isin`` request. Callers should skip it unless
+            ``yf_isin`` is actually wanted.
 
     Returns:
         The mapped ``CommodityInfo``. Missing fields are left as None.
@@ -214,7 +353,13 @@ def lookup_commodity_info(symbol: str, retries: int = DEFAULT_RETRY_COUNT) -> Co
     except Exception as exc:
         logger.debug("funds_data unavailable for %s: %s", symbol, exc)
         funds_data = None
-    return info_to_commodity_info(info, funds_data)
+    isin: object | None = None
+    if fetch_isin:
+        try:
+            isin = ticker.isin
+        except Exception as exc:
+            logger.debug("isin unavailable for %s: %s", symbol, exc)
+    return info_to_commodity_info(info, funds_data, isin=isin)
 
 
 @dataclass(slots=True)
@@ -248,7 +393,9 @@ class MetadataFetcher:
             return results
         with ThreadPoolExecutor(max_workers=self.threads) as pool:
             future_to_req = {
-                pool.submit(lookup_commodity_info, req.symbol, self.retries): req
+                pool.submit(
+                    lookup_commodity_info, req.symbol, self.retries, fetch_isin=req.fetch_isin
+                ): req
                 for req in requests
             }
             for future in as_completed(future_to_req):
@@ -263,9 +410,26 @@ class MetadataFetcher:
         return results
 
 
+def _values_equal(provider: MetadataValue, existing: object) -> bool:
+    """Type-aware equality between a provider value and a stored metadata value.
+
+    A bare number is never considered equal to a quoted string of the same
+    text, so ``--refresh`` rewrites ``"3"`` to ``3`` and ``"0.0004"`` to
+    ``0.0004``. Numbers are compared numerically.
+    """
+    if isinstance(provider, str):
+        return isinstance(existing, str) and provider == existing
+    if isinstance(existing, (str, bool)) or not isinstance(existing, (int, float, Decimal)):
+        return False
+    try:
+        return Decimal(str(existing)) == Decimal(str(provider))
+    except InvalidOperation:
+        return False
+
+
 def plan_metadata_changes(
     commodity: str,
-    existing: Mapping[str, str],
+    existing: Mapping[str, object],
     info: CommodityInfo,
     selected_keys: Sequence[str],
     *,
@@ -282,21 +446,21 @@ def plan_metadata_changes(
     FILLED, UPDATED, PARTIAL (some needed key unavailable and nothing was
     applied), UNCHANGED.
     """
-    adds: list[tuple[str, str]] = []
-    updates: list[tuple[str, str, str]] = []
+    adds: list[tuple[str, MetadataValue]] = []
+    updates: list[tuple[str, object, MetadataValue]] = []
     unavailable: list[str] = []
     any_value = False
 
     for key in selected_keys:
         value = get_info_value(info, key)
-        if value:
+        if value is not None:
             any_value = True
         if key not in existing:
-            if value:
+            if value is not None:
                 adds.append((key, value))
             else:
                 unavailable.append(key)
-        elif refresh and value and value != existing[key]:
+        elif refresh and value is not None and not _values_equal(value, existing[key]):
             updates.append((key, existing[key], value))
 
     if not any_value:

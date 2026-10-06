@@ -87,7 +87,7 @@ this when a new holding is added or occasionally with `--refresh`.
 uv run beanprices fetch-metadata --ledger main.beancount \
     [--commodity SPY] \
     [--all] \
-    [--keys yf_name,yf_asset_class,yf_sector,yf_industry,yf_category] \
+    [--keys yf_name,yf_quote_type,yf_isin,yf_exchange,yf_currency,yf_asset_class,yf_sector,yf_industry,yf_category,yf_fund_family,yf_expense_ratio,yf_morningstar_rating,yf_market_cap_category] \
     [--refresh] \
     [--write] \
     [--output-file commodities.bean] \
@@ -126,20 +126,32 @@ Written in this order when adding:
 | Key | Meaning |
 |---|---|
 | `yf_name` | Long name, e.g. `"Vanguard Total Stock Market ETF"` |
+| `yf_quote_type` | `"EQUITY"`, `"ETF"`, `"MUTUALFUND"`, `"CRYPTOCURRENCY"`, … |
+| `yf_isin` | ISIN, e.g. `"US0378331005"` (separate lookup) |
+| `yf_exchange` | Exchange name, e.g. `"NasdaqGS"` |
+| `yf_currency` | Instrument currency, e.g. `"USD"` |
 | `yf_asset_class` | `"Equity"`, `"Bond"`, `"Cash"`, `"Crypto"`, etc. |
 | `yf_sector` | Stocks only |
 | `yf_industry` | Stocks only |
 | `yf_category` | Funds only (Morningstar-style, e.g. `"Large Blend"`) |
+| `yf_fund_family` | Funds only, e.g. `"Vanguard"` |
+| `yf_expense_ratio` | Funds only, decimal fraction (0.05% is `0.0005`) |
+| `yf_morningstar_rating` | Mutual funds only, integer 1–5 |
+| `yf_market_cap_category` | Stocks only: Mega/Large/Mid/Small/Micro/Nano Cap |
 
 Keys are namespaced `yf_` to make clear they came from yfinance and to avoid
-colliding with hand-written metadata.
+colliding with hand-written metadata. `yf_expense_ratio` and
+`yf_morningstar_rating` are written as bare numbers; all other values are
+written as quoted strings.
 
-Routing is on yfinance's `quoteType`: equities get `yf_name`,
-`yf_asset_class`, `yf_sector`, `yf_industry`; ETFs and mutual funds get
-`yf_name`, `yf_category`, and `yf_asset_class` inferred from the fund
-breakdown when one position is at least 80% of the total (mixed funds are
-left for a human); crypto gets `yf_name` and `yf_asset_class` `Crypto`;
-anything else gets `yf_name` only.
+Routing is on yfinance's `quoteType`. `yf_name`, `yf_quote_type`, `yf_isin`,
+`yf_exchange`, `yf_currency`, and `yf_asset_class` are set for every security
+type where available. Equities additionally get `yf_sector`, `yf_industry`,
+and `yf_market_cap_category`. ETFs/mutual funds additionally get `yf_category`,
+`yf_fund_family`, `yf_expense_ratio`, and `yf_morningstar_rating` (mutual
+funds), with `yf_asset_class` inferred from the fund breakdown when one
+position is at least 80% of the total (mixed funds are left for a human).
+Crypto gets `yf_asset_class` `Crypto`.
 
 ### `migrate-dated-prices`
 

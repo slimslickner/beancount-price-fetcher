@@ -20,8 +20,16 @@ FUND_ASSET_CLASS_THRESHOLD: float = 0.80
 # avoid colliding with hand-written metadata.
 METADATA_KEYS: tuple[str, ...] = (
     "yf_name",
+    "yf_quote_type",
+    "yf_isin",
+    "yf_exchange",
+    "yf_currency",
     "yf_asset_class",
     "yf_sector",
     "yf_industry",
     "yf_category",
+    "yf_fund_family",
+    "yf_expense_ratio",
+    "yf_morningstar_rating",
+    "yf_market_cap_category",
 )

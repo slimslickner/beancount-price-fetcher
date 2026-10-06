@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+from .models import MetadataValue, metadata_value_text
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_INDENT = "  "
@@ -43,8 +45,8 @@ class DirectiveEdit:
 
     commodity: str
     lineno: int
-    adds: tuple[tuple[str, str], ...] = ()
-    updates: tuple[tuple[str, str], ...] = ()
+    adds: tuple[tuple[str, MetadataValue], ...] = ()
+    updates: tuple[tuple[str, MetadataValue], ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -53,7 +55,7 @@ class NewMetadataDirective:
 
     commodity: str
     directive_date: date
-    key_values: tuple[tuple[str, str], ...]
+    key_values: tuple[tuple[str, MetadataValue], ...]
 
 
 @dataclass(slots=True, frozen=True)
@@ -72,9 +74,16 @@ def _quote(value: str) -> str:
     return f'"{escaped}"'
 
 
-def _render_key_line(indent: str, key: str, value: str) -> str:
-    """Render ``<indent>key: "value"``."""
-    return f"{indent}{key}: {_quote(value)}"
+def _render_value(value: MetadataValue) -> str:
+    """Render a metadata value: strings quoted/escaped, numbers bare."""
+    if isinstance(value, str):
+        return _quote(value)
+    return metadata_value_text(value)
+
+
+def _render_key_line(indent: str, key: str, value: MetadataValue) -> str:
+    """Render ``<indent>key: <value>``."""
+    return f"{indent}{key}: {_render_value(value)}"
 
 
 def _parse_key_line(line: str) -> tuple[str, str, str, str] | None:
@@ -126,13 +135,13 @@ def _parse_key_line(line: str) -> tuple[str, str, str, str] | None:
     return indent, key, gap, comment
 
 
-def _replace_line_value(line: str, key: str, new_value: str) -> str | None:
+def _replace_line_value(line: str, key: str, new_value: MetadataValue) -> str | None:
     """Replace the value on ``line`` if it belongs to ``key``; else None."""
     parsed = _parse_key_line(line)
     if parsed is None or parsed[1] != key:
         return None
     indent, parsed_key, gap, comment = parsed
-    return f"{indent}{parsed_key}: {_quote(new_value)}{gap}{comment}"
+    return f"{indent}{parsed_key}: {_render_value(new_value)}{gap}{comment}"
 
 
 def _metadata_block(lines: list[str], directive_index: int) -> tuple[int, int]:

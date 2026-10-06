@@ -35,14 +35,15 @@ class CommodityDirective:
 
     ``filename``/``lineno`` point at the directive's original source (which
     may be an included file). ``metadata`` holds the user-authored keys
-    (everything except beancount's internal ``filename``/``lineno``), with
-    values coerced to strings for display/comparison.
+    (everything except beancount's internal ``filename``/``lineno``) with
+    their **native** types preserved, so a quoted string (``str``) can be
+    told apart from a bare number (``Decimal``).
     """
 
     commodity: str
     filename: str
     lineno: int
-    metadata: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(slots=True, frozen=True)
@@ -118,7 +119,7 @@ def extract_commodity_directives(entries: list[Any]) -> dict[str, CommodityDirec
             logger.debug("commodity %s has no source location; skipping", entry.currency)
             continue
         user_metadata = {
-            str(key): str(value) for key, value in meta.items() if key not in _INTERNAL_META_KEYS
+            str(key): value for key, value in meta.items() if key not in _INTERNAL_META_KEYS
         }
         out[entry.currency] = CommodityDirective(
             commodity=entry.currency,

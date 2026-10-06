@@ -107,13 +107,36 @@ class MetadataStatus(Enum):
     ERROR = "error"
 
 
+#: A metadata value as stored on a directive. Strings are written quoted;
+#: ``int``/``Decimal`` are written as bare Beancount numbers.
+MetadataValue = str | int | Decimal
+
+
+def metadata_value_text(value: MetadataValue) -> str:
+    """Render a metadata value as bare source text (no quoting).
+
+    Used both to write numbers unquoted and to compare a provider value
+    against the string form already stored on a directive.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    return str(value)
+
+
 @dataclass(slots=True, frozen=True)
 class CommodityInfo:
     """Descriptive metadata for one commodity as returned by yfinance.
 
     Every field is optional: providers frequently omit sector/industry for
     funds or category for equities, and a lookup that yields nothing usable
-    is not an error.
+    is not an error. ``quote_type``/``isin``/``exchange``/``currency`` are
+    populated for all security types; the fund-only fields are set only for
+    ETFs/mutual funds.
+
+    ``expense_ratio`` is a decimal fraction (0.05% -> ``Decimal("0.0005")``),
+    not a percentage; ``morningstar_rating`` is an integer 1-5.
     """
 
     name: str | None = None
@@ -121,6 +144,14 @@ class CommodityInfo:
     sector: str | None = None
     industry: str | None = None
     category: str | None = None
+    quote_type: str | None = None
+    isin: str | None = None
+    exchange: str | None = None
+    currency: str | None = None
+    fund_family: str | None = None
+    expense_ratio: Decimal | None = None
+    morningstar_rating: int | None = None
+    market_cap_category: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -134,5 +165,5 @@ class MetadataPlan:
 
     commodity: str
     status: MetadataStatus
-    adds: tuple[tuple[str, str], ...] = ()
-    updates: tuple[tuple[str, str, str], ...] = ()
+    adds: tuple[tuple[str, MetadataValue], ...] = ()
+    updates: tuple[tuple[str, object, MetadataValue], ...] = ()

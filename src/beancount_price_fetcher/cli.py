@@ -36,7 +36,13 @@ from .metadata_writer import (
     apply_directive_edits,
 )
 from .migrate import migrate_dated_prices
-from .models import CommodityInfo, FetchedPrice, Frequency, MetadataPlan, MetadataStatus
+from .models import (
+    CommodityInfo,
+    FetchedPrice,
+    Frequency,
+    MetadataPlan,
+    MetadataStatus,
+)
 from .requirements import compute_requirements
 from .writer import DEFAULT_FILE_EXTENSION, PriceWriter
 
@@ -316,14 +322,20 @@ def fetch_metadata(
 
     rows: list[tuple[str, MetadataStatus, str]] = []
     requests: list[MetadataLookupRequest] = []
-    pending: dict[str, tuple[CommodityDirective | None, dict[str, str]]] = {}
+    pending: dict[str, tuple[CommodityDirective | None, dict[str, object]]] = {}
     for code in sorted(scope):
         directive = directives.get(code)
-        existing = directive.metadata if directive is not None else {}
+        existing: dict[str, object] = directive.metadata if directive is not None else {}
         if not refresh and all(key in existing for key in selected_keys):
             rows.append((code, MetadataStatus.COMPLETE, ""))
             continue
-        requests.append(MetadataLookupRequest(code, _resolve_ticker(code, analysis)))
+        requests.append(
+            MetadataLookupRequest(
+                code,
+                _resolve_ticker(code, analysis),
+                fetch_isin="yf_isin" in selected_keys,
+            )
+        )
         pending[code] = (directive, existing)
 
     outcomes = _lookup_metadata(requests, threads, retries)
@@ -446,13 +458,21 @@ def _resolve_ticker(commodity: str, analysis: LedgerAnalysis) -> str:
     return metadata.ticker if metadata is not None else commodity
 
 
+def _display_metadata_value(value: object) -> str:
+    """Render a stored or provider value for the status detail column."""
+    if isinstance(value, str):
+        return f'"{value}"'
+    return str(value)
+
+
 def _plan_detail(plan: MetadataPlan) -> str:
     """Human-readable detail column for a metadata plan."""
     if plan.status is MetadataStatus.FILLED:
         return "added " + ", ".join(key for key, _value in plan.adds)
     if plan.status is MetadataStatus.UPDATED:
         return "updated " + ", ".join(
-            f"{key} ({old!r} -> {new!r})" for key, old, new in plan.updates
+            f"{key} ({_display_metadata_value(old)} -> {_display_metadata_value(new)})"
+            for key, old, new in plan.updates
         )
     if plan.status is MetadataStatus.PARTIAL:
         return "some selected keys unavailable from provider"

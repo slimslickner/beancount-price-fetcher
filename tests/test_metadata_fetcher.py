@@ -7,6 +7,7 @@ is opt-in and only runs when ``BEANPRICES_LIVE`` is set.
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, ClassVar
 
@@ -33,13 +34,21 @@ def test_equity_routes_name_sector_industry() -> None:
         "longName": "Apple Inc.",
         "sector": "Technology",
         "industry": "Consumer Electronics",
+        "fullExchangeName": "NasdaqGS",
+        "currency": "USD",
+        "marketCap": 4_870_000_000_000,
     }
-    result = info_to_commodity_info(info)
+    result = info_to_commodity_info(info, isin="US0378331005")
     assert result == CommodityInfo(
         name="Apple Inc.",
         asset_class="Equity",
         sector="Technology",
         industry="Consumer Electronics",
+        quote_type="EQUITY",
+        isin="US0378331005",
+        exchange="NasdaqGS",
+        currency="USD",
+        market_cap_category="Mega Cap",
     )
 
 
@@ -53,15 +62,27 @@ def test_etf_routes_category_and_infers_equity() -> None:
         "quoteType": "ETF",
         "longName": "Vanguard Total Stock Market ETF",
         "category": "Large Blend",
+        "fundFamily": "Vanguard",
+        "netExpenseRatio": 0.04,
+        "fullExchangeName": "NYSEArca",
+        "currency": "USD",
+        "morningStarOverallRating": 4,
     }
     funds = SimpleNamespace(
         asset_classes={"stockPosition": 0.95, "bondPosition": 0.02, "cashPosition": 0.03}
     )
-    result = info_to_commodity_info(info, funds)
+    result = info_to_commodity_info(info, funds, isin="US0000000001")
     assert result == CommodityInfo(
         name="Vanguard Total Stock Market ETF",
         asset_class="Equity",
         category="Large Blend",
+        quote_type="ETF",
+        isin="US0000000001",
+        exchange="NYSEArca",
+        currency="USD",
+        fund_family="Vanguard",
+        expense_ratio=Decimal("0.0004"),
+        morningstar_rating=4,
     )
 
 
@@ -70,22 +91,32 @@ def test_mutualfund_routes_category() -> None:
         "quoteType": "MUTUALFUND",
         "longName": "Vanguard 500 Index Fund",
         "category": "Large Blend",
+        "annualReportExpenseRatio": 0.0004,
     }
-    result = info_to_commodity_info(info, None)
+    funds = SimpleNamespace(fund_overview={"family": "Vanguard"})
+    result = info_to_commodity_info(info, funds)
+    assert result.quote_type == "MUTUALFUND"
     assert result.name == "Vanguard 500 Index Fund"
     assert result.category == "Large Blend"
+    assert result.fund_family == "Vanguard"
+    assert result.expense_ratio == Decimal("0.0004")
     assert result.sector is None
     assert result.industry is None
 
 
 def test_cryptocurrency_routes_name_and_asset_class() -> None:
-    result = info_to_commodity_info({"quoteType": "CRYPTOCURRENCY", "longName": "Bitcoin USD"})
-    assert result == CommodityInfo(name="Bitcoin USD", asset_class="Crypto")
+    result = info_to_commodity_info(
+        {"quoteType": "CRYPTOCURRENCY", "longName": "Bitcoin USD"}, isin="-"
+    )
+    assert result == CommodityInfo(
+        name="Bitcoin USD", asset_class="Crypto", quote_type="CRYPTOCURRENCY"
+    )
+    assert result.isin is None
 
 
 def test_unknown_quote_type_yields_name_only() -> None:
     result = info_to_commodity_info({"quoteType": "INDEX", "longName": "S&P 500"})
-    assert result == CommodityInfo(name="S&P 500")
+    assert result == CommodityInfo(name="S&P 500", quote_type="INDEX")
 
 
 def test_info_not_a_mapping_yields_empty() -> None:
