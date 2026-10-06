@@ -185,13 +185,32 @@ def _unified_diff(original: str, updated: str, path: Path) -> str:
     )
 
 
+def _read_text(path: Path) -> tuple[str, str]:
+    """Read a file preserving its line endings; return ``(content, newline)``.
+
+    ``newline`` is ``"\r\n"`` when the file uses CRLF, else ``"\n"``. A
+    missing file yields ``("", "\n")``.
+    """
+    if not path.exists():
+        return "", "\n"
+    content = path.read_bytes().decode("utf-8")
+    return content, ("\r\n" if "\r\n" in content else "\n")
+
+
 def _atomic_write(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` via a temp file + rename in the same dir."""
+    """Write ``content`` to ``path`` via a temp file + rename in the same dir.
+
+    The destination's existing permission bits are preserved; new files fall
+    back to ``0644``. ``mkstemp`` creates a ``0600`` file, so without this the
+    rename would silently tighten the mode of a hand-maintained ledger.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    mode = (path.stat().st_mode & 0o7777) if path.exists() else 0o644
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(content)
+        os.chmod(tmp_name, mode)
         os.replace(tmp_name, path)
     except OSError:
         try:
@@ -219,8 +238,9 @@ def apply_directive_edits(
         A ``MetadataWriteResult`` with the unified diff, whether anything
         changed, and any errors. On error the file is left untouched.
     """
-    original = path.read_text(encoding="utf-8") if path.exists() else ""
-    lines = original.splitlines()
+    original, newline = _read_text(path)
+    normalized = original.replace("\r\n", "\n")
+    lines = normalized.splitlines()
     errors: list[str] = []
 
     for edit in sorted(edits, key=lambda item: item.lineno, reverse=True):
@@ -267,9 +287,10 @@ def apply_directive_edits(
             indent = _detect_indent(lines, start, end)
             lines[end:end] = [_render_key_line(indent, key, value) for key, value in edit.adds]
 
-    updated_content = "\n".join(lines)
-    if original.endswith("\n") and lines:
-        updated_content += "\n"
+    updated_normalized = "\n".join(lines)
+    if normalized.endswith("\n") and lines:
+        updated_normalized += "\n"
+    updated_content = updated_normalized.replace("\n", newline)
 
     changed = updated_content != original
     if changed and write:
@@ -307,7 +328,7 @@ def append_new_directives(
     Returns:
         A ``MetadataWriteResult`` for the output file.
     """
-    original = path.read_text(encoding="utf-8") if path.exists() else ""
+    original, newline = _read_text(path)
     declared = _declared_commodities(path)
     blocks: list[str] = []
     for directive in directives:
@@ -329,12 +350,12 @@ def append_new_directives(
         return MetadataWriteResult(path, "", False, ())
 
     addition = "\n\n".join(blocks) + "\n"
-    base = original
+    base = original.replace("\r\n", "\n")
     if base and not base.endswith("\n"):
         base += "\n"
     if base:
         addition = "\n" + addition
-    updated_content = base + addition
+    updated_content = (base + addition).replace("\n", newline)
 
     changed = updated_content != original
     if changed and write:

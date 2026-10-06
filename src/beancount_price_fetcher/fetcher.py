@@ -4,7 +4,7 @@ One ``yf.Ticker(ticker).history(start=, end=)`` call per commodity (not per
 date) is the main API-efficiency lever. Multiple tickers are fetched in
 parallel via ``ThreadPoolExecutor`` since yfinance is I/O-bound.
 
-Per-ticker retry uses ``tenacity`` exponential backoff (1s → 10s, cap 30s,
+Per-ticker retry uses ``tenacity`` exponential backoff (1s → 10s, cap 10s,
 max 3 attempts by default). Failures for one ticker never abort the batch
 -- they're collected as ``(PriceRequirement, Exception)`` tuples and
 returned alongside successes.

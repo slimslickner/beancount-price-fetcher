@@ -29,7 +29,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 import yfinance
@@ -139,8 +139,11 @@ def _fund_asset_class(asset_classes: object) -> str | None:
     values: dict[str, float] = {}
     for key, raw in asset_classes.items():
         number = _to_float(raw)
-        if number is not None:
-            values[str(key)] = number
+        if number is None:
+            continue
+        if isinstance(raw, str) and raw.strip().endswith("%"):
+            number /= 100
+        values[str(key)] = number
     if not values:
         return None
     total = sum(values.values())
@@ -200,11 +203,15 @@ def _fund_family(info: Mapping[str, object], funds_data: object | None) -> str |
 
 
 def _to_int(value: object) -> int | None:
-    """Coerce an integral provider value (e.g. a Morningstar rating) to int."""
+    """Coerce an integral provider value (e.g. a Morningstar rating) to int.
+
+    Rounds half away from zero (``4.5`` -> ``5``) rather than Python's
+    banker's rounding, so a provider midpoint does not round down.
+    """
     number = _to_float(value)
     if number is None:
         return None
-    return round(number)
+    return int(Decimal(str(number)).to_integral_value(rounding=ROUND_HALF_UP))
 
 
 def _expense_ratio(info: Mapping[str, object]) -> Decimal | None:

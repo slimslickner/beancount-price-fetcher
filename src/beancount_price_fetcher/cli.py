@@ -48,6 +48,9 @@ from .writer import DEFAULT_FILE_EXTENSION, PriceWriter
 
 logger = logging.getLogger(__name__)
 
+_INCLUDE_RE = re.compile(r'^\s*include\s+"([^"]+)"', re.MULTILINE)
+_ERROR_DETAIL_LIMIT = 80
+
 
 @click.group()
 @click.version_option(__version__, prog_name="beanprices")
@@ -348,7 +351,7 @@ def fetch_metadata(
         directive, existing = pending[code]
         outcome = outcomes[code]
         if isinstance(outcome, Exception):
-            rows.append((code, MetadataStatus.ERROR, str(outcome)))
+            rows.append((code, MetadataStatus.ERROR, _short_error(outcome)))
             errors.append(f"{code}: {outcome}")
             continue
         plan = plan_metadata_changes(code, existing, outcome, selected_keys, refresh=refresh)
@@ -375,26 +378,40 @@ def fetch_metadata(
     for code, status, detail in sorted(rows, key=lambda row: row[0]):
         click.echo(f"{code:12} {status.value:10} {detail}")
 
-    for path in sorted(edits_by_file):
-        result = apply_directive_edits(path, edits_by_file[path], write=do_write)
-        if result.diff:
-            click.echo(result.diff)
-        for error in result.errors:
-            click.echo(error, err=True)
-            errors.append(error)
+    file_edits = [(path, edits_by_file[path]) for path in sorted(edits_by_file)]
+    previews = [
+        (path, edits, apply_directive_edits(path, edits, write=False)) for path, edits in file_edits
+    ]
 
     output_path = (
         Path(output_file) if output_file is not None else Path(ledger).parent / "commodities.bean"
     )
-    if new_directives:
-        result = append_new_directives(output_path, new_directives, write=do_write)
-        if result.diff:
-            click.echo(result.diff)
-        for error in result.errors:
+    output_preview = (
+        append_new_directives(output_path, new_directives, write=False) if new_directives else None
+    )
+
+    blocking_errors = [error for _path, _edits, result in previews for error in result.errors]
+    if output_preview is not None:
+        blocking_errors.extend(output_preview.errors)
+
+    if blocking_errors:
+        for error in blocking_errors:
             click.echo(error, err=True)
             errors.append(error)
-        if not _is_included(Path(ledger), output_path.name):
-            click.echo(f'Reminder: add `include "{output_path.name}"` to {ledger}')
+    else:
+        if do_write:
+            for path, edits in file_edits:
+                apply_directive_edits(path, edits, write=True)
+            if output_preview is not None:
+                append_new_directives(output_path, new_directives, write=True)
+        for _path, _edits, result in previews:
+            if result.diff:
+                click.echo(result.diff)
+        if output_preview is not None:
+            if output_preview.diff:
+                click.echo(output_preview.diff)
+            if do_write and not _is_included(Path(ledger), output_path.name):
+                click.echo(f'Reminder: add `include "{output_path.name}"` to {ledger}')
 
     if not do_write:
         click.echo("Preview only; rerun with --write to apply.")
@@ -405,17 +422,36 @@ def fetch_metadata(
 def _lookup_metadata(
     requests: list[MetadataLookupRequest], threads: int, retries: int
 ) -> dict[str, CommodityInfo | Exception]:
-    """Run metadata lookups, showing a live progress bar on an interactive stderr."""
+    """Run metadata lookups, showing a live progress bar on an interactive stderr.
+
+    yfinance's own logger is muted for the duration: it writes ERROR records
+    (e.g. an HTTP 404 for an unknown symbol) that are redundant with this
+    command's status table and collide with the bar's ``\r`` redraws.
+    """
     fetcher = MetadataFetcher(threads=threads, retries=retries)
     if not requests:
         return {}
-    if not sys.stderr.isatty():
-        click.echo(f"Looking up metadata for {len(requests)} commodit(ies)...", err=True)
-        return fetcher.fetch_all(requests)
-    with click.progressbar(
-        length=len(requests), label="Looking up metadata", file=sys.stderr
-    ) as bar:
-        return fetcher.fetch_all(requests, on_result=lambda _code: bar.update(1))
+    yfinance_logger = logging.getLogger("yfinance")
+    previous_level = yfinance_logger.level
+    yfinance_logger.setLevel(logging.CRITICAL)
+    try:
+        if not sys.stderr.isatty():
+            click.echo(f"Looking up metadata for {len(requests)} commodit(ies)...", err=True)
+            return fetcher.fetch_all(requests)
+        with click.progressbar(
+            length=len(requests), label="Looking up metadata", file=sys.stderr
+        ) as bar:
+            return fetcher.fetch_all(requests, on_result=lambda _code: bar.update(1))
+    finally:
+        yfinance_logger.setLevel(previous_level)
+
+
+def _short_error(exc: Exception) -> str:
+    """Collapse an exception message to one bounded line for the status table."""
+    text = " ".join(str(exc).split())
+    if len(text) <= _ERROR_DETAIL_LIMIT:
+        return text
+    return text[: _ERROR_DETAIL_LIMIT - 1].rstrip() + "\u2026"
 
 
 def _parse_metadata_keys(keys: str | None) -> list[str]:
@@ -437,7 +473,8 @@ def _metadata_scope(analysis: LedgerAnalysis, commodity: str | None, include_all
     """Determine which commodities the metadata command should consider."""
     if commodity is not None:
         if commodity in analysis.operating_currencies:
-            return set()
+            msg = f"commodity {commodity} is an operating currency; nothing to fetch"
+            raise click.BadParameter(msg)
         if (
             commodity not in analysis.held_periods
             and commodity not in analysis.commodity_directives
@@ -482,13 +519,30 @@ def _plan_detail(plan: MetadataPlan) -> str:
 
 
 def _is_included(ledger_path: Path, output_name: str) -> bool:
-    """True if the ledger text already includes ``output_name``."""
-    try:
-        content = ledger_path.read_text(encoding="utf-8")
-    except OSError:
-        return False
-    pattern = r'include\s+"[^"]*' + re.escape(output_name) + r'"'
-    return re.search(pattern, content) is not None
+    """True if ``output_name`` is reachable from ``ledger_path`` via includes.
+
+    Walks the whole ``include`` graph (relative to each including file), so a
+    file included from a sub-file is recognised, not just direct includes in
+    the main ledger.
+    """
+    seen: set[Path] = set()
+    queue = [ledger_path]
+    while queue:
+        current = queue.pop()
+        resolved = current.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        try:
+            content = current.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for match in _INCLUDE_RE.finditer(content):
+            target = match.group(1)
+            if Path(target).name == output_name:
+                return True
+            queue.append(current.parent / target)
+    return False
 
 
 @cli.command("migrate-dated-prices")

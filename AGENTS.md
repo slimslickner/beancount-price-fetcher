@@ -69,7 +69,12 @@ src/beancount_price_fetcher/
 ├── migrate.py       # one-time: dated files -> per-symbol; verify-and-archive
 ├── fetcher.py       # yfinance threaded fetch; tenacity retry/backoff;
 │                     # per-ticker failure isolation
-└── cli.py           # click CLI: list-missing, fetch, migrate-dated-prices
+├── metadata_fetcher.py  # yfinance metadata lookup: quoteType routing,
+│                     # retry, threaded orchestration, add/update planning
+├── metadata_writer.py   # minimal text edits to commodity directives
+│                     # (append/update key, atomic write, unified diff)
+└── cli.py           # click CLI: list-missing, fetch, fetch-metadata,
+                     # migrate-dated-prices
 
 tests/
 ├── fixtures/example.beancount    # shared fixture (cost basis + non-base currency
@@ -82,6 +87,8 @@ tests/
 ├── test_writer.py
 ├── test_migrate.py
 ├── test_fetcher.py
+├── test_metadata_fetcher.py
+├── test_metadata_writer.py
 ├── test_cli.py
 └── test_e2e.py
 ```
@@ -92,7 +99,7 @@ tests/
 |---|---|
 | Default frequency | **daily** (per-commodity override via `price-frequency` metadata) |
 | "Held" definition | **cost-basis + non-base-currency only** (Income/Expense/Equity flows excluded) |
-| Retry policy | **3 attempts, exp 1s→10s, cap 30s** via tenacity |
+| Retry policy | **3 attempts, exp 1s→10s, cap 10s** via tenacity |
 | Python version | **3.13** |
 | Multi-period holdings | **yes** — commodity can have multiple disjoint `HeldPeriod` entries (bought/sold/rebought produces two periods). `PriceRequirement` covers all of them via `min_date`/`max_date` and `missing_dates` (union of dates in all periods, minus existing). |
 | Configuration | **no config file** — global defaults in `constants.py`, CLI flags override |
